@@ -1,0 +1,456 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Sidebar } from './components/Sidebar';
+import { DataGrid } from './components/DataGrid';
+import { AIAnalyst } from './components/AIAnalyst';
+import { GraphView } from './components/GraphView';
+import { InjectionHub } from './components/InjectionHub';
+import { ChatInterface } from './components/ChatInterface';
+import { SourceLog } from './components/SourceLog';
+import { fetchTableData } from './services/supabase';
+import { TableRow, LensType, GraphNode } from './types';
+import { LENS_CONFIG } from './constants';
+import { 
+  RefreshCw, Sparkles, BrainCircuit, X, Database, Search, 
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen
+} from 'lucide-react';
+import clsx from 'clsx';
+
+// Icon Map for Lenses
+const LENS_ICONS: Record<LensType, any> = {
+  'All': Layers,
+  'Social': Users,
+  'Strategic': Target,
+  'Operational': ShieldAlert,
+  'Creative': Lightbulb,
+  'Pathways': GitMerge,
+  'AnchorFocus': Scan
+};
+
+const App: React.FC = () => {
+  // Navigation State
+  const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
+  const [showDataVault, setShowDataVault] = useState(false);
+  const [showSourceLog, setShowSourceLog] = useState(false);
+  const [showInjectionHub, setShowInjectionHub] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [currentLens, setCurrentLens] = useState<LensType>('All');
+  
+  // Refresh coordination
+  const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
+
+  // Trace State
+  const [traceNode, setTraceNode] = useState<GraphNode | null>(null);
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  const [focusedSource, setFocusedSource] = useState<string | null>(null);
+
+  // Data State
+  const [currentTable, setCurrentTable] = useState<string>('');
+  const [recentTables, setRecentTables] = useState<string[]>([]);
+  const [discoveredTables, setDiscoveredTables] = useState<string[]>([]);
+  const [data, setData] = useState<TableRow[] | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isAnalystOpen, setIsAnalystOpen] = useState<boolean>(false);
+  
+  // Refs for shortcuts
+  const chatInputRef = useRef<HTMLInputElement>(null);
+
+  const loadData = async (table: string) => {
+    if (!table) return;
+
+    setLoading(true);
+    setError(null);
+    try {
+      const { data: tableData, error: apiError } = await fetchTableData(table);
+      if (apiError) throw apiError;
+      setData(tableData);
+      
+      setRecentTables(prev => {
+        const newRecent = [table, ...prev.filter(t => t !== table)].slice(0, 5);
+        return newRecent;
+      });
+    } catch (err: any) {
+      console.error("Data load error:", err);
+      let errorMessage = 'Failed to fetch data';
+      if (typeof err === 'object') {
+        errorMessage = err.message || JSON.stringify(err);
+      }
+      setError(errorMessage);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewMode === 'table' && currentTable) {
+      loadData(currentTable);
+    }
+  }, [currentTable, viewMode]);
+
+  // GLOBAL SHORTCUTS LISTENER
+  useEffect(() => {
+    const handleGlobalKeys = (e: KeyboardEvent) => {
+        // Ignore if typing in an input/textarea
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+        switch(e.key) {
+            case '[':
+                e.preventDefault();
+                setShowDataVault(prev => !prev);
+                break;
+            case ']':
+                e.preventDefault();
+                setIsChatOpen(prev => !prev);
+                break;
+            case 'i':
+            case 'I':
+                if (!e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    setShowInjectionHub(true);
+                }
+                break;
+            case '/':
+                e.preventDefault();
+                setIsChatOpen(true);
+                // Slight delay to allow render
+                setTimeout(() => {
+                    const input = document.querySelector('input[name="chat-input"]') as HTMLInputElement;
+                    if(input) input.focus();
+                }, 100);
+                break;
+        }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeys);
+    return () => window.removeEventListener('keydown', handleGlobalKeys);
+  }, []);
+
+  const handleTableSelect = (table: string) => {
+    setCurrentTable(table);
+    setViewMode('table');
+  };
+
+  const handleGraphUpdate = () => {
+    setGraphRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleTraceNode = (node: GraphNode) => {
+    setTraceNode(node);
+    setIsChatOpen(true);
+  };
+
+  const handleChatNodeSelect = (nodeId: string) => {
+     setFocusedNodeId(nodeId);
+     if (viewMode !== 'graph') setViewMode('graph');
+  };
+
+  return (
+    <div className="relative w-full h-screen bg-cyber-black text-slate-200 overflow-hidden font-sans selection:bg-cyber-cyan selection:text-black">
+      
+      {/* 1. BACKGROUND LAYER (Graph View) */}
+      <div className="absolute inset-0 z-0">
+        <GraphView 
+          discoveredTables={discoveredTables} 
+          refreshTrigger={graphRefreshTrigger} 
+          activeLens={currentLens}
+          onLensChange={setCurrentLens}
+          onTraceNode={handleTraceNode}
+          focusNodeId={focusedNodeId}
+          focusSource={focusedSource}
+          onClearSourceFilter={() => setFocusedSource(null)}
+        />
+      </div>
+
+      {/* 2. OVERLAY LAYER (Floating UI) */}
+      <div className="absolute inset-0 z-10 pointer-events-none">
+        
+        {/* --- TOP LEFT ISLAND (Branding & Lenses) --- */}
+        <div className="absolute top-6 left-6 z-50 pointer-events-auto flex flex-col gap-2">
+           
+           {/* Board Title */}
+           <div 
+             className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg px-4 py-3 shadow-xl flex items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors group min-w-[280px]"
+             onClick={() => setViewMode('graph')}
+           >
+              <div className="bg-cyber-cyan/10 p-1.5 rounded-md text-cyber-cyan group-hover:scale-110 transition-transform">
+                <BrainCircuit size={20} />
+              </div>
+              <div>
+                  <h1 className="text-sm font-bold text-white tracking-wide leading-none mb-0.5">SYNAPSE BOARD</h1>
+                  <span className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    System Online
+                  </span>
+              </div>
+           </div>
+
+           {/* Lens Selector */}
+           <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-3 shadow-xl flex flex-col gap-2 min-w-[280px]">
+              <div className="flex items-center justify-between px-1 mb-1">
+                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active View Lens</span>
+                 <div className="relative group">
+                    <Info size={12} className="text-slate-600 cursor-help hover:text-white transition-colors" />
+                    
+                    {/* INFO TOOLTIP */}
+                    <div className="absolute top-full -left-1 mt-3 w-64 bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[100] translate-y-2 group-hover:translate-y-0">
+                        <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
+                            <BrainCircuit size={12} className="text-cyber-cyan"/> Neural Pathways
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                            Simulates distinct neural pathways to adapt the graph for different scenarios. Depending on the lens chosen, specific notes are highlighted to support strategic, operational, or creative thinking.
+                        </p>
+                        {/* Triangle Arrow */}
+                        <div className="absolute -top-1 left-1.5 w-2 h-2 bg-slate-900 rotate-45 border-t border-l border-slate-700"></div>
+                    </div>
+                 </div>
+              </div>
+              
+              {/* Flex Wrap Container (No Scrollbars) */}
+              <div className="flex items-center gap-2 flex-wrap">
+                  {(Object.keys(LENS_CONFIG) as LensType[]).map((lensKey, idx) => {
+                      const Icon = LENS_ICONS[lensKey];
+                      const isActive = currentLens === lensKey;
+                      const config = LENS_CONFIG[lensKey];
+                      
+                      // Special styling for special views (Pathways & AnchorFocus)
+                      let baseClass = "p-2.5 rounded-md transition-all relative border";
+                      let colorClass = "";
+                      
+                      if (lensKey === 'Pathways') {
+                        // Purple Theme
+                        if (isActive) {
+                             colorClass = "bg-cyber-purple/20 text-cyber-purple border-cyber-purple/50 shadow-[0_0_15px_rgba(168,85,247,0.3)]";
+                        } else {
+                             colorClass = "bg-transparent text-cyber-purple/60 border-transparent hover:bg-cyber-purple/10 hover:text-cyber-purple hover:border-cyber-purple/30";
+                        }
+                      } else if (lensKey === 'AnchorFocus') {
+                        // Amber Theme
+                        if (isActive) {
+                             colorClass = "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.3)]";
+                        } else {
+                             colorClass = "bg-transparent text-amber-500/60 border-transparent hover:bg-amber-500/10 hover:text-amber-400 hover:border-amber-500/30";
+                        }
+                      } else {
+                        // Standard Cyan/Slate Theme
+                        if (isActive) {
+                            colorClass = "bg-cyber-cyan/10 text-cyber-cyan border-cyber-cyan/30 shadow-[0_0_10px_rgba(6,182,212,0.1)]";
+                        } else {
+                            colorClass = "bg-transparent text-slate-500 border-transparent hover:text-slate-300 hover:bg-white/5 hover:border-white/10";
+                        }
+                      }
+
+                      return (
+                          <div key={lensKey} className="group relative">
+                              <button
+                                  onClick={() => setCurrentLens(lensKey)}
+                                  className={clsx(baseClass, colorClass)}
+                              >
+                                  <Icon size={18} />
+                                  <span className="absolute -bottom-2 right-0 text-[8px] opacity-0 group-hover:opacity-50 text-slate-500 font-mono transition-opacity">{idx + 1}</span>
+                                  
+                                  {/* Special Indicator Dot for special modes */}
+                                  {(lensKey === 'Pathways' || lensKey === 'AnchorFocus') && (
+                                     <span className={clsx(
+                                       "absolute -top-1 -right-1 w-2 h-2 rounded-full",
+                                       isActive ? (lensKey === 'Pathways' ? "bg-cyber-purple animate-pulse" : "bg-amber-500 animate-pulse") : "hidden"
+                                     )}></span>
+                                  )}
+                              </button>
+                              
+                              {/* RICH TOOLTIP (Fixed Position z-index) */}
+                              <div className="absolute top-full left-0 mt-3 w-64 bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[100] translate-y-2 group-hover:translate-y-0">
+                                  <div className="flex items-center gap-2 mb-1.5">
+                                     <Icon size={14} className={isActive ? "text-white" : (lensKey === 'Pathways' ? "text-cyber-purple" : (lensKey === 'AnchorFocus' ? "text-amber-400" : "text-cyber-cyan"))} />
+                                     <span className="text-xs font-bold text-white uppercase tracking-wider">{config.label}</span>
+                                     <span className="ml-auto text-[10px] bg-slate-800 px-1.5 rounded text-slate-400 font-mono">Key: {idx+1}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 leading-relaxed border-t border-white/10 pt-1.5">
+                                      {config.description}
+                                  </p>
+                                  {/* Triangle Arrow */}
+                                  <div className="absolute -top-1 left-3 w-2 h-2 bg-slate-900 rotate-45 border-t border-l border-slate-700"></div>
+                              </div>
+                          </div>
+                      )
+                  })}
+              </div>
+           </div>
+        </div>
+
+        {/* --- TOP RIGHT ISLAND (Actions, Profile, Share) --- */}
+        <div className="absolute top-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
+            {/* Context Actions (Table Mode) */}
+            {viewMode === 'table' && currentTable && (
+                 <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-1 shadow-xl">
+                    <button onClick={() => loadData(currentTable)} className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-white">
+                       <RefreshCw size={18} className={clsx(loading && "animate-spin")} />
+                    </button>
+                    <button 
+                      onClick={() => setIsAnalystOpen(!isAnalystOpen)}
+                      className={clsx(
+                        "p-2 rounded-md transition-all text-slate-400 hover:text-indigo-400",
+                        isAnalystOpen && "text-indigo-400 bg-indigo-500/10"
+                      )}
+                    >
+                      <Sparkles size={18} />
+                    </button>
+                 </div>
+            )}
+            
+            {/* Primary Actions */}
+            <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
+               <button 
+                onClick={() => setShowSourceLog(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                  showSourceLog
+                    ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50"
+                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                )}
+                title="View Source Handbook"
+              >
+                <BookOpen size={16} />
+                <span className="hidden sm:inline">Sources</span>
+              </button>
+
+               <button 
+                onClick={() => setShowDataVault(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                  showDataVault
+                    ? "bg-cyber-purple/20 text-cyber-purple border-cyber-purple/50"
+                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                )}
+                title="Data Vault [Key: []"
+              >
+                <Database size={16} />
+                <span className="hidden sm:inline">Data Vault</span>
+              </button>
+              
+              <button 
+                onClick={() => setShowInjectionHub(true)}
+                className="flex items-center gap-2 bg-cyber-cyan hover:bg-cyan-400 text-black px-4 py-2 rounded-md text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105"
+                title="Quick Inject [Key: I]"
+              >
+                 <Plus size={16} strokeWidth={3} />
+                 <span className="hidden sm:inline">Inject</span>
+              </button>
+            </div>
+
+            {/* User & Share */}
+            <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
+               <div className="flex -space-x-2 px-2">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">JD</div>
+                  <div className="w-8 h-8 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold text-black">AI</div>
+               </div>
+               <button className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-md text-xs font-bold transition-colors">
+                  Share
+               </button>
+            </div>
+        </div>
+
+        {/* --- BOTTOM RIGHT CHAT FAB --- */}
+        <div className="fixed bottom-6 right-6 z-50 pointer-events-auto">
+            <button
+                onClick={() => setIsChatOpen(!isChatOpen)}
+                className={clsx(
+                    "flex items-center justify-center w-14 h-14 rounded-full shadow-2xl transition-all duration-300 hover:scale-110",
+                    isChatOpen 
+                        ? "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white rotate-90" 
+                        : "bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_20px_rgba(37,99,235,0.5)]"
+                )}
+                title="Neural Chat [Key: ]]"
+            >
+                {isChatOpen ? <X size={24} /> : <MessageSquare size={24} fill="currentColor" />}
+            </button>
+        </div>
+
+      </div>
+
+      {/* 3. MODAL LAYER (Table View) */}
+      {viewMode === 'table' && (
+        <div className="absolute inset-0 z-20 bg-cyber-black/95 backdrop-blur-xl flex flex-col animate-in fade-in duration-300 pt-24 px-4 pb-4">
+              <div className="absolute top-6 right-8 z-30">
+                 <button onClick={() => setViewMode('graph')} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-slate-300 hover:text-white transition-colors">
+                    <X size={24} />
+                 </button>
+              </div>
+              
+              <div className="h-full border border-white/10 rounded-xl overflow-hidden bg-cyber-slate/50 shadow-2xl relative">
+                  {currentTable ? (
+                    <DataGrid data={data} loading={loading} error={error} tableName={currentTable} />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                       <Database size={48} className="mb-4 opacity-20" />
+                       <p className="font-mono text-sm">SELECT A SCHEMA FROM THE DATA VAULT</p>
+                       <button onClick={() => setShowDataVault(true)} className="mt-4 text-cyber-cyan hover:underline text-xs">OPEN VAULT</button>
+                    </div>
+                  )}
+                  
+                  {/* AI Analyst Overlay */}
+                  {isAnalystOpen && (
+                    <div className="absolute top-0 right-0 bottom-0 w-96 border-l border-white/10 shadow-2xl z-30">
+                       <AIAnalyst 
+                          tableName={currentTable}
+                          data={data}
+                          isOpen={isAnalystOpen}
+                          onClose={() => setIsAnalystOpen(false)}
+                        />
+                    </div>
+                  )}
+              </div>
+        </div>
+      )}
+
+      {/* 4. MODAL LAYER (Injection Hub) */}
+      {showInjectionHub && (
+        <div className="absolute inset-0 z-50 bg-cyber-black/95 backdrop-blur-xl animate-in slide-in-from-bottom-10">
+           <div className="absolute top-6 right-6 z-50">
+              <button 
+                onClick={() => setShowInjectionHub(false)}
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={24} />
+              </button>
+           </div>
+           <div className="h-full pt-24 pb-6 px-6">
+              <InjectionHub 
+                onComplete={() => { setShowInjectionHub(false); handleGraphUpdate(); }} 
+                onGraphUpdate={handleGraphUpdate}
+              />
+           </div>
+        </div>
+      )}
+
+      {/* 5. DRAWER LAYER (Data Vault) */}
+      <Sidebar 
+        isOpen={showDataVault}
+        onClose={() => setShowDataVault(false)}
+        currentTable={currentTable}
+        onSelectTable={handleTableSelect}
+        recentTables={recentTables}
+        onDiscoveredTables={setDiscoveredTables}
+      />
+
+      {/* 6. DRAWER LAYER (Source Log) */}
+      <SourceLog 
+        isOpen={showSourceLog}
+        onClose={() => setShowSourceLog(false)}
+        onSelectSource={setFocusedSource}
+        activeSource={focusedSource}
+      />
+
+      {/* 7. CHAT INTERFACE */}
+      <ChatInterface 
+        isOpen={isChatOpen} 
+        onClose={() => setIsChatOpen(false)}
+        traceNode={traceNode}
+        onNodeSelect={handleChatNodeSelect}
+      />
+    </div>
+  );
+};
+
+export default App;

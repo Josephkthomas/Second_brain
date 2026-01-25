@@ -1,0 +1,7 @@
+{
+  "name": "Supabase & Gemini Data Explorer",
+  "description": "A powerful data explorer for your Supabase database. View tables, analyze data with Gemini AI, and manage your content with a modern React UI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
