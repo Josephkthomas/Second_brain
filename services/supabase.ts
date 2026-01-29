@@ -320,3 +320,20 @@ export const searchKnowledgeSources = async (query: string): Promise<{ id: strin
   
   return data || [];
 };
+
+export const semanticSearchNodes = async (embedding: number[], matchThreshold: number, matchCount: number): Promise<any[]> => {
+  const client = getSupabase();
+  
+  // Assumes a 'match_nodes' RPC function exists in Supabase.
+  const { data, error } = await client.rpc('match_nodes', {
+    query_embedding: embedding,
+    match_threshold: matchThreshold,
+    match_count: matchCount,
+  });
+
+  if (error) {
+    console.warn("Semantic search failed. Ensure 'match_nodes' RPC function exists.", error);
+    return [];
+  }
+  return data || [];
+};

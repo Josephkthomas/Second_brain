@@ -84,7 +84,48 @@ begin
   end if;
 end $$;
 
--- 5. Override Security Protocols (Dev Mode)
+-- 5. Enable Vector Extension (for Semantic Search)
+create extension if not exists vector;
+
+-- 6. Add Embedding Column to Nodes
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_name = 'knowledge_nodes' and column_name = 'embedding') then
+    alter table knowledge_nodes add column embedding vector(768);
+  end if;
+end $$;
+
+-- 7. Create Match Function for Semantic Search
+create or replace function match_nodes (
+  query_embedding vector(768),
+  match_threshold float,
+  match_count int
+)
+returns table (
+  id uuid,
+  label text,
+  entity_type text,
+  description text,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    knowledge_nodes.id,
+    knowledge_nodes.label,
+    knowledge_nodes.entity_type,
+    knowledge_nodes.description,
+    1 - (knowledge_nodes.embedding <=> query_embedding) as similarity
+  from knowledge_nodes
+  where 1 - (knowledge_nodes.embedding <=> query_embedding) > match_threshold
+  order by knowledge_nodes.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;
+
+-- 8. Override Security Protocols (Dev Mode)
 alter table knowledge_nodes enable row level security;
 alter table knowledge_edges enable row level security;
 alter table knowledge_sources enable row level security;
