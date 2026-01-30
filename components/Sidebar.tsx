@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Search, Loader2, Settings, Lock, Unlock, X, Table, Key, Terminal, Eye, AlertCircle, Copy, Check } from 'lucide-react';
+import { Database, Search, Loader2, Settings, Lock, Unlock, X, Table, Key, Terminal, Eye, AlertCircle, Copy, Check, Zap } from 'lucide-react';
 import { COMMON_TABLES } from '../constants';
-import { discoverTables, setAdminKey, getAdminKey } from '../services/supabase';
+import { discoverTables, setAdminKey, getAdminKey, countNodesWithoutEmbeddings } from '../services/supabase';
+import { backfillEmbeddings, BackfillProgress } from '../services/gemini';
 import clsx from 'clsx';
 
 interface SidebarProps {
@@ -158,6 +159,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [viewSettings, setViewSettings] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Embedding Backfill State
+  const [missingEmbeddings, setMissingEmbeddings] = useState<number>(0);
+  const [isBackfilling, setIsBackfilling] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<BackfillProgress | null>(null);
+
   const loadTables = async () => {
     setIsDiscovering(true);
     try {
@@ -174,8 +180,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (isOpen) {
         loadTables();
+        // Check for missing embeddings
+        countNodesWithoutEmbeddings().then(setMissingEmbeddings);
     }
   }, [isOpen, hasAdminKey]);
+
+  const handleBackfillEmbeddings = async () => {
+    setIsBackfilling(true);
+    setBackfillProgress(null);
+
+    try {
+      const result = await backfillEmbeddings(10, (progress) => {
+        setBackfillProgress({ ...progress });
+      });
+      setBackfillProgress(result);
+      // Refresh the count after backfill
+      const remaining = await countNodesWithoutEmbeddings();
+      setMissingEmbeddings(remaining);
+    } catch (error) {
+      console.error("Backfill failed:", error);
+    } finally {
+      setIsBackfilling(false);
+    }
+  };
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,6 +344,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                      AUTHENTICATE
                                  </button>
                              </div>
+                         </div>
+                     </div>
+
+                     {/* Embedding Backfill Section */}
+                     <div className="mb-8">
+                         <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
+                             <Zap size={16} className="text-yellow-500"/> EMBEDDING SYNC
+                         </h3>
+                         <div className="bg-cyber-slate p-4 rounded border border-white/5 space-y-3">
+                             {missingEmbeddings > 0 ? (
+                               <>
+                                 <p className="text-[10px] text-yellow-500">
+                                   {missingEmbeddings} nodes are missing embeddings. Semantic search won't work for these nodes.
+                                 </p>
+                                 {backfillProgress && (
+                                   <div className="text-[10px] text-slate-400 space-y-1">
+                                     <div>Progress: {backfillProgress.processed} / {backfillProgress.total}</div>
+                                     <div className="text-emerald-500">Success: {backfillProgress.successful}</div>
+                                     {backfillProgress.failed > 0 && (
+                                       <div className="text-red-500">Failed: {backfillProgress.failed}</div>
+                                     )}
+                                     {backfillProgress.currentNode && isBackfilling && (
+                                       <div className="text-cyber-cyan truncate">Processing: {backfillProgress.currentNode}</div>
+                                     )}
+                                   </div>
+                                 )}
+                                 <button
+                                   onClick={handleBackfillEmbeddings}
+                                   disabled={isBackfilling}
+                                   className="w-full bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 px-3 py-2 rounded text-[10px] font-bold hover:bg-yellow-500/30 disabled:opacity-50 flex items-center justify-center gap-2"
+                                 >
+                                   {isBackfilling ? (
+                                     <>
+                                       <Loader2 size={12} className="animate-spin" />
+                                       GENERATING EMBEDDINGS...
+                                     </>
+                                   ) : (
+                                     <>
+                                       <Zap size={12} />
+                                       GENERATE MISSING EMBEDDINGS
+                                     </>
+                                   )}
+                                 </button>
+                               </>
+                             ) : (
+                               <p className="text-[10px] text-emerald-500 flex items-center gap-2">
+                                 <Check size={12} /> All nodes have embeddings. Semantic search is fully operational.
+                               </p>
+                             )}
                          </div>
                      </div>
 

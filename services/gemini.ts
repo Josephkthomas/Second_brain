@@ -1,11 +1,12 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TableRow, AnalysisResult } from "../types";
-import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes } from "./supabase";
+import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings } from "./supabase";
 
 const initGenAI = () => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error("Gemini API Key is missing. Please set process.env.API_KEY");
+    console.error("Gemini API Key is missing. Checked: process.env.API_KEY, process.env.GEMINI_API_KEY");
+    throw new Error("Gemini API Key is missing. Please set GEMINI_API_KEY in environment variables.");
   }
   return new GoogleGenAI({ apiKey });
 };
@@ -660,9 +661,11 @@ export const queryGraphRAG = async (
 
     if (queryEmbedding.length > 0) {
         // Step 2: Semantic Search via RPC
-        nodes = await semanticSearchNodes(queryEmbedding, 0.6, 15);
-        console.log("Semantic Search Results:", nodes.length);
+        // Lower threshold (0.4) allows more fuzzy matches for better recall
+        nodes = await semanticSearchNodes(queryEmbedding, 0.4, 20);
+        console.log("Semantic Search Results:", nodes.length, "nodes found");
     } else {
+        console.warn("Embedding generation failed, falling back to keyword search");
         // Fallback: Keyword Search
         const searchTerms = await generateSearchQueries(query);
         nodes = await fetchRelevantNodes(searchTerms);
@@ -733,4 +736,89 @@ export const queryGraphRAG = async (
   } catch (error) {
     return { answer: "I encountered an error querying the neural network." };
   }
+};
+
+// --- EMBEDDING BACKFILL UTILITY ---
+
+export interface BackfillProgress {
+  total: number;
+  processed: number;
+  successful: number;
+  failed: number;
+  currentNode?: string;
+}
+
+export const backfillEmbeddings = async (
+  batchSize: number = 10,
+  onProgress?: (progress: BackfillProgress) => void
+): Promise<BackfillProgress> => {
+  const total = await countNodesWithoutEmbeddings();
+
+  const progress: BackfillProgress = {
+    total,
+    processed: 0,
+    successful: 0,
+    failed: 0
+  };
+
+  if (total === 0) {
+    console.log("All nodes already have embeddings!");
+    return progress;
+  }
+
+  console.log(`Starting embedding backfill for ${total} nodes...`);
+
+  // Process in batches to avoid overwhelming the API
+  while (progress.processed < total) {
+    const nodes = await fetchNodesWithoutEmbeddings(batchSize);
+
+    if (nodes.length === 0) break;
+
+    for (const node of nodes) {
+      progress.currentNode = node.label;
+      onProgress?.(progress);
+
+      try {
+        const text = `${node.label}: ${node.description || ''}`;
+        const embedding = await generateEmbedding(text);
+
+        if (embedding.length > 0) {
+          const success = await updateNodeEmbedding(node.id, embedding);
+          if (success) {
+            progress.successful++;
+            console.log(`✓ Generated embedding for: ${node.label}`);
+          } else {
+            progress.failed++;
+            console.error(`✗ Failed to save embedding for: ${node.label}`);
+          }
+        } else {
+          progress.failed++;
+          console.error(`✗ Failed to generate embedding for: ${node.label}`);
+        }
+      } catch (error) {
+        progress.failed++;
+        console.error(`✗ Error processing ${node.label}:`, error);
+      }
+
+      progress.processed++;
+      onProgress?.(progress);
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  console.log(`Backfill complete: ${progress.successful} successful, ${progress.failed} failed`);
+  return progress;
+};
+
+// Get count of nodes needing embeddings (for UI display)
+export const getEmbeddingStatus = async (): Promise<{ missing: number; message: string }> => {
+  const missing = await countNodesWithoutEmbeddings();
+
+  if (missing === 0) {
+    return { missing: 0, message: "All nodes have embeddings" };
+  }
+
+  return { missing, message: `${missing} nodes need embeddings` };
 };

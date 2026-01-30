@@ -357,9 +357,66 @@ export const searchKnowledgeSources = async (query: string): Promise<{ id: strin
   return data || [];
 };
 
+// Fetch nodes that are missing embeddings (for backfill)
+export const fetchNodesWithoutEmbeddings = async (limit: number = 50): Promise<{ id: string; label: string; description: string }[]> => {
+  const client = getSupabase();
+
+  const { data, error } = await client
+    .from('knowledge_nodes')
+    .select('id, label, description')
+    .is('embedding', null)
+    .limit(limit);
+
+  if (error) {
+    console.error("Failed to fetch nodes without embeddings:", error);
+    return [];
+  }
+
+  return data || [];
+};
+
+// Update a node's embedding
+export const updateNodeEmbedding = async (nodeId: string, embedding: number[]): Promise<boolean> => {
+  const client = getSupabase();
+
+  const { error } = await client
+    .from('knowledge_nodes')
+    .update({ embedding })
+    .eq('id', nodeId);
+
+  if (error) {
+    console.error(`Failed to update embedding for node ${nodeId}:`, error);
+    return false;
+  }
+
+  return true;
+};
+
+// Get count of nodes missing embeddings
+export const countNodesWithoutEmbeddings = async (): Promise<number> => {
+  const client = getSupabase();
+
+  const { count, error } = await client
+    .from('knowledge_nodes')
+    .select('*', { count: 'exact', head: true })
+    .is('embedding', null);
+
+  if (error) {
+    console.error("Failed to count nodes without embeddings:", error);
+    return 0;
+  }
+
+  return count || 0;
+};
+
 export const semanticSearchNodes = async (embedding: number[], matchThreshold: number, matchCount: number): Promise<any[]> => {
   const client = getSupabase();
-  
+
+  if (!embedding || embedding.length === 0) {
+    console.warn("semanticSearchNodes called with empty embedding");
+    return [];
+  }
+
   // Assumes a 'match_nodes' RPC function exists in Supabase.
   const { data, error } = await client.rpc('match_nodes', {
     query_embedding: embedding,
@@ -368,8 +425,11 @@ export const semanticSearchNodes = async (embedding: number[], matchThreshold: n
   });
 
   if (error) {
-    console.warn("Semantic search failed. Ensure 'match_nodes' RPC function exists.", error);
+    console.error("Semantic search failed. Error details:", error.message, error.code);
+    console.error("Ensure 'match_nodes' RPC function exists in Supabase with pgvector extension enabled.");
     return [];
   }
+
+  console.log(`Semantic search returned ${data?.length || 0} results (threshold: ${matchThreshold})`);
   return data || [];
 };
