@@ -1,14 +1,10 @@
 import { LensType } from './types';
 
-// Derived from the user's provided JWT and prompt
-export const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlwanVobW9ocm1mcWZidHlsZnF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgxNjQ2MjcsImV4cCI6MjA4Mzc0MDYyN30.tEaGrsLIKAyiHhXKU9m1Y9KNbWqNqhJPib9D8LVmTuU`;
-
-// Provided by user for full access
-export const SUPABASE_SERVICE_ROLE_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlwanVobW9ocm1mcWZidHlsZnF2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODE2NDYyNywiZXhwIjoyMDgzNzQwNjI3fQ.RHp1-Pid8xfjzK4mepFiTyzu4Pbl76e97vkh14q16S0`;
-
-// Extracted project ref from the JWT payload ("ref": "ipjuhmohrmfqfbtylfqv")
-export const SUPABASE_PROJECT_ID = 'ipjuhmohrmfqfbtylfqv';
-export const SUPABASE_URL = `https://${SUPABASE_PROJECT_ID}.supabase.co`;
+// Supabase credentials - loaded from environment variables
+// Set these in .env.local for local development or in your deployment platform
+export const SUPABASE_URL = process.env.SUPABASE_URL || '';
+export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+export const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 export const COMMON_TABLES: string[] = ['knowledge_nodes', 'knowledge_edges'];
 
