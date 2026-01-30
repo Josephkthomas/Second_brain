@@ -79,6 +79,8 @@ const SHORTCUTS = [
     { key: 'Backspace', label: 'Delete Node', category: 'Edit' },
 ];
 
+const SPOTLIGHT_RADIUS = 150; // Radius for the "Flashlight" effect
+
 const findShortestPath = (startId: string, endId: string, links: GraphLink[]): Set<string> => {
     const adj = new Map<string, string[]>();
     links.forEach(l => {
@@ -127,8 +129,8 @@ const SmartLinkerHUD: React.FC<SmartLinkerHUDProps> = ({ source, target, onClose
       setAnalyzing(true);
       try {
         const suggestion = await suggestRelationship(
-           { label: source.label, type: source.type, description: source.data.description },
-           { label: target.label, type: target.type, description: target.data.description }
+           { label: source.label, type: source.type, description: String(source.data.description || '') },
+           { label: target.label, type: target.type, description: String(target.data.description || '') }
         );
         if (mounted) {
           setRelation(suggestion.relation);
@@ -259,7 +261,7 @@ const MergeNodeHUD: React.FC<MergeNodeHUDProps> = ({ source, target, onClose, on
                     <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500 group-hover:text-emerald-400">Source</div>
                     <div className="font-bold text-white text-lg mb-1">{source.label}</div>
                     <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">{source.type}</span>
-                    <p className="text-xs text-slate-400 mt-3 text-center line-clamp-2">{source.data.description || "No description"}</p>
+                    <p className="text-xs text-slate-400 mt-3 text-center line-clamp-2">{String(source.data.description || "No description")}</p>
                     
                     <button 
                         onClick={() => handleMerge(source, target)}
@@ -276,7 +278,7 @@ const MergeNodeHUD: React.FC<MergeNodeHUDProps> = ({ source, target, onClose, on
                     <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500 group-hover:text-emerald-400">Target</div>
                     <div className="font-bold text-white text-lg mb-1">{target.label}</div>
                     <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">{target.type}</span>
-                    <p className="text-xs text-slate-400 mt-3 text-center line-clamp-2">{target.data.description || "No description"}</p>
+                    <p className="text-xs text-slate-400 mt-3 text-center line-clamp-2">{String(target.data.description || "No description")}</p>
                     
                     <button 
                         onClick={() => handleMerge(target, source)}
@@ -352,7 +354,7 @@ const EnrichmentModal: React.FC<EnrichmentModalProps> = ({ orphans, onClose, onS
                 const batch = selectedOrphans.slice(i, i + batchSize);
                 
                 const edges = await generateCrossConnections(
-                    batch.map(n => ({ label: n.label, type: n.type, description: n.data.description })),
+                    batch.map(n => ({ label: n.label, type: n.type, description: String(n.data.description || '') })),
                     contextNodes.map((n: any) => ({ label: n.label, entity_type: n.entity_type }))
                 );
 
@@ -492,7 +494,7 @@ const EnrichmentModal: React.FC<EnrichmentModalProps> = ({ orphans, onClose, onS
                                                     )}
                                                 </div>
                                                 <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                                                    {node.data.description || "No description provided."}
+                                                    {String(node.data.description || "No description provided.")}
                                                 </p>
                                             </div>
                                         </div>
@@ -1284,11 +1286,12 @@ export const GraphView: React.FC<GraphViewProps> = ({
     feMerge.append("feMergeNode").attr("in", "coloredBlur");
     feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Gold Glow for Source Filter Focus
+    // ENHANCED GOLD GLOW for Focus Nodes
     const goldFilter = defs.append("filter").attr("id", "gold-glow");
-    goldFilter.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "coloredBlur");
+    goldFilter.append("feGaussianBlur").attr("stdDeviation", "5").attr("result", "coloredBlur");
     const goldMerge = goldFilter.append("feMerge");
     goldMerge.append("feMergeNode").attr("in", "coloredBlur");
+    goldMerge.append("feMergeNode").attr("in", "coloredBlur"); // Double up for intensity
     goldMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
     defs.selectAll("marker")
@@ -1333,7 +1336,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
         }
     });
 
+    // GENERAL MOUSEMOVE (Includes Selection Rect & Spotlight Logic)
     svg.on("mousemove", (event: any) => {
+        // 1. Selection Rect Logic
         if (selectionRect && event.shiftKey) {
             const [currX, currY] = d3.pointer(event);
             setSelectionRect(prev => {
@@ -1344,6 +1349,52 @@ export const GraphView: React.FC<GraphViewProps> = ({
                     width: currX - prev.x,
                     height: currY - prev.y
                 };
+            });
+        }
+
+        // 2. Spotlight Logic for Filtered Context
+        if (focusSource || activeTagFilter) {
+            const transform = d3.zoomTransform(svg.node() as Element);
+            const [px, py] = d3.pointer(event);
+            const gx = transform.invertX(px);
+            const gy = transform.invertY(py);
+
+            // Update Nodes opacity based on spotlight
+            node.attr("opacity", (d: any) => {
+                const status = getLensStatus(d);
+                if (status === 'focus') return 1;
+                if (status === 'hidden') return 0.02;
+                
+                // Check distance for Context nodes
+                const dist = Math.hypot(d.x - gx, d.y - gy);
+                return dist < SPOTLIGHT_RADIUS ? 1 : 0.05;
+            });
+
+            // Update Text Labels based on spotlight
+            node.select("text")
+                .attr("opacity", (d: any) => {
+                    const status = getLensStatus(d);
+                    if (status === 'focus') return 1;
+                    
+                    const dist = Math.hypot(d.x - gx, d.y - gy);
+                    return dist < SPOTLIGHT_RADIUS ? 1 : 0; 
+                });
+            
+            // Update Links based on spotlight
+            linkVisible.attr("stroke-opacity", (d: any) => {
+                 const sStatus = getLensStatus(d.source);
+                 const tStatus = getLensStatus(d.target);
+                 
+                 // If both are focused, keep high opacity
+                 if (sStatus === 'focus' && tStatus === 'focus') return 1;
+                 
+                 // If either node is in spotlight, increase opacity
+                 const sDist = Math.hypot(d.source.x - gx, d.source.y - gy);
+                 const tDist = Math.hypot(d.target.x - gx, d.target.y - gy);
+                 
+                 if (sDist < SPOTLIGHT_RADIUS || tDist < SPOTLIGHT_RADIUS) return 0.6;
+                 
+                 return 0.05;
             });
         }
     });
@@ -1439,7 +1490,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
             const sNode = graphData.nodes.find(n => n.id === s);
             const tNode = graphData.nodes.find(n => n.id === t);
             if (sNode && tNode && getLensStatus(sNode) === 'focus' && getLensStatus(tNode) === 'focus') {
-                return 2.5; 
+                return 3; // Thicker for filtered connection
             }
           }
 
@@ -1452,8 +1503,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
          
          if (focusSource || activeTagFilter) {
              if (sStatus === 'focus' && tStatus === 'focus') return 1;
-             if (sStatus === 'focus' || tStatus === 'focus') return 0.75; 
-             return 0.1; 
+             return 0.05; // Very low opacity for non-focused edges by default
          }
 
          if (pathfindingPath.size > 0) {
@@ -1504,6 +1554,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
            const sStatus = getLensStatus(l.source as GraphNode);
            const tStatus = getLensStatus(l.target as GraphNode);
            if (sStatus === 'hidden' || tStatus === 'hidden') return false;
+           // Hide particles in filtered mode unless on focussed edges
+           if ((focusSource || activeTagFilter) && (sStatus !== 'focus' || tStatus !== 'focus')) return false;
+
            if (t === 'implicit_tag_match') return false;
            if (activeLens === 'Pathways' && activeFlowLens) {
                return cat === activeFlowLens;
@@ -1673,7 +1726,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
          
          // In Source Filter Mode or Tag Filter, context nodes are dimmed but visible
          if ((focusSource || activeTagFilter) && status === 'context') return 0.15;
-         if (status === 'context') return 0.2; 
+         if (status === 'context') return 0.2;
          return 1;
       }) 
       // Ensure all nodes are interactive, even if dimmed context nodes in filter mode
@@ -1799,7 +1852,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
       })
       .style("pointer-events", "none")
       .style("text-shadow", "0 2px 4px rgba(0,0,0,1)")
-      .attr("opacity", (d: GraphNode) => xRayMode ? 1 : undefined); 
+      // Hide labels for context nodes in Filter Mode by default
+      .attr("opacity", (d: GraphNode) => {
+          if (xRayMode) return 1;
+          const status = getLensStatus(d);
+          if ((focusSource || activeTagFilter) && status === 'context') return 0;
+          return 1;
+      });
 
     svg.on("mousemove.linker", (event: any) => {
         if ((linkerMode.active) && linkerMode.source && !linkerMode.target) {
@@ -2003,7 +2062,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                                 <span className="text-slate-400 group-hover:text-cyan-400"><CornerDownLeft size={16}/></span>
                                 <div>
                                     <div className="text-sm font-bold text-white">{node.label}</div>
-                                    <div className="text-xs text-slate-500">{node.type} • {node.data.description?.slice(0, 50)}...</div>
+                                    <div className="text-xs text-slate-500">{node.type} • {String(node.data.description || '').slice(0, 50)}...</div>
                                 </div>
                              </div>
                              <span className="text-xs text-slate-600 font-mono">Jump to</span>
@@ -2681,20 +2740,20 @@ export const GraphView: React.FC<GraphViewProps> = ({
                     {/* AI Tags */}
                     {selectedNode.data.tags && Array.isArray(selectedNode.data.tags) && (selectedNode.data.tags as any[]).map((tag: any, i: number) => (
                       <span key={`ai-${i}`} className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700 flex items-center gap-1">
-                         <Bot size={10} /> {tag}
+                         <Bot size={10} /> {String(tag)}
                       </span>
                     ))}
                     {/* User Tags */}
                     {selectedNode.data.user_tags && Array.isArray(selectedNode.data.user_tags) && (selectedNode.data.user_tags as any[]).map((tag: any, i: number) => (
                       <span key={`user-${i}`} className="text-[10px] bg-pink-900/30 text-pink-300 px-2 py-0.5 rounded-full border border-pink-500/50 flex items-center gap-1">
-                         <User size={10} /> {tag}
+                         <User size={10} /> {String(tag)}
                       </span>
                     ))}
                </div>
 
                {selectedNode.data.description && (
                  <p className="text-sm text-slate-300 leading-relaxed mb-6 border-l-2 border-slate-700 pl-3">
-                   {selectedNode.data.description}
+                   {String(selectedNode.data.description)}
                  </p>
                )}
                
@@ -2702,7 +2761,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                   <div className="mb-6 bg-black/30 p-3 rounded border border-white/5 relative">
                      <Quote size={16} className="text-slate-600 absolute top-2 left-2 opacity-50"/>
                      <p className="text-xs text-slate-400 italic pl-6">
-                       "{selectedNode.data.quote}"
+                       "{String(selectedNode.data.quote)}"
                      </p>
                   </div>
                )}
@@ -2716,7 +2775,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                  </div>
                  <div className="flex justify-between text-xs border-b border-slate-800 pb-2">
                    <span className="text-slate-500">Source</span>
-                   <span className="text-slate-400 truncate max-w-[150px]">{selectedNode.data.source || 'Unknown'}</span>
+                   <span className="text-slate-400 truncate max-w-[150px]">{String(selectedNode.data.source || 'Unknown')}</span>
                  </div>
                  <div className="flex justify-between text-xs border-b border-slate-800 pb-2">
                    <span className="text-slate-500">ID</span>
