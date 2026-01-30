@@ -653,26 +653,28 @@ export const queryGraphRAG = async (
       }).join('\n')}
     `;
   } else {
-    // B. Semantic Graph RAG
-    
-    // Step 1: Generate Embedding for Query
-    const queryEmbedding = await generateEmbedding(query);
+    // B. Graph RAG - Keyword Search (Primary) with Semantic Search (Enhancement)
     let nodes: any[] = [];
 
-    if (queryEmbedding.length > 0) {
-        // Step 2: Semantic Search via RPC
-        // Lower threshold (0.4) allows more fuzzy matches for better recall
-        nodes = await semanticSearchNodes(queryEmbedding, 0.4, 20);
-        console.log("Semantic Search Results:", nodes.length, "nodes found");
-    } else {
-        console.warn("Embedding generation failed, falling back to keyword search");
-        // Fallback: Keyword Search
-        const searchTerms = await generateSearchQueries(query);
-        nodes = await fetchRelevantNodes(searchTerms);
-    }
-    
+    // Step 1: Always try keyword search first (reliable, works without embeddings)
+    console.log("Performing keyword search for:", query);
+    const searchTerms = await generateSearchQueries(query);
+    console.log("Generated search terms:", searchTerms);
+    nodes = await fetchRelevantNodes(searchTerms);
+    console.log("Keyword search found:", nodes.length, "nodes");
+
+    // Step 2: If keyword search found nothing, try semantic search as backup
     if (nodes.length === 0) {
-      return { answer: "I scanned the knowledge graph but didn't find specific nodes matching your query." };
+      console.log("Keyword search returned no results, trying semantic search...");
+      const queryEmbedding = await generateEmbedding(query);
+      if (queryEmbedding.length > 0) {
+        nodes = await semanticSearchNodes(queryEmbedding, 0.4, 20);
+        console.log("Semantic search found:", nodes.length, "nodes");
+      }
+    }
+
+    if (nodes.length === 0) {
+      return { answer: "I scanned the knowledge graph but didn't find specific nodes matching your query. Try using different keywords or check if the topic exists in your knowledge base." };
     }
 
     // Step 3: Local Graph Expansion (Fetch edges for top results)
