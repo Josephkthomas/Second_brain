@@ -11,12 +11,14 @@ import { GraphView } from './components/GraphView';
 import { InjectionHub } from './components/InjectionHub';
 import { ChatInterface } from './components/ChatInterface';
 import { SourceLog } from './components/SourceLog';
+import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
+import { hasCompletedOnboarding, resetOnboarding } from './components/onboarding/onboarding-utils';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, HelpCircle
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -40,6 +42,9 @@ const MainApp: React.FC = () => {
   const [showInjectionHub, setShowInjectionHub] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
+
+  // Onboarding State
+  const [showOnboarding, setShowOnboarding] = useState(() => !hasCompletedOnboarding());
   
   // Refresh coordination
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
@@ -345,8 +350,22 @@ const MainApp: React.FC = () => {
               </button>
             </div>
 
-            {/* User & Sign Out */}
+            {/* Help & User */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
+               {/* Help / Tutorial Button */}
+               <button
+                 onClick={() => {
+                   resetOnboarding();
+                   setShowOnboarding(true);
+                 }}
+                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyan-400 transition-colors"
+                 title="View Tutorial"
+               >
+                  <HelpCircle size={18} />
+               </button>
+
+               <div className="w-px h-6 bg-white/10" />
+
                <div className="flex items-center gap-2 px-2">
                   <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">
                     {user?.email?.charAt(0).toUpperCase() || 'U'}
@@ -458,12 +477,21 @@ const MainApp: React.FC = () => {
       />
 
       {/* 7. CHAT INTERFACE */}
-      <ChatInterface 
-        isOpen={isChatOpen} 
+      <ChatInterface
+        isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
         traceNode={traceNode}
         onNodeSelect={handleChatNodeSelect}
       />
+
+      {/* 8. ONBOARDING WIZARD */}
+      {showOnboarding && (
+        <OnboardingWizard
+          onComplete={() => setShowOnboarding(false)}
+          onSkip={() => setShowOnboarding(false)}
+          onOpenInjectionHub={() => setShowInjectionHub(true)}
+        />
+      )}
     </div>
   );
 };
