@@ -583,22 +583,46 @@ export const mineContextFromRawText = async (
     } catch (e) { return { nodes: [], edges: [] }; }
 };
 
+// Simple keyword extraction that doesn't depend on API
+const extractKeywordsFromQuery = (query: string): string[] => {
+  // Remove common question words and stopwords
+  const stopwords = new Set([
+    'what', 'can', 'you', 'tell', 'me', 'about', 'the', 'a', 'an', 'is', 'are',
+    'how', 'why', 'when', 'where', 'who', 'which', 'do', 'does', 'did', 'have',
+    'has', 'had', 'be', 'been', 'being', 'this', 'that', 'these', 'those',
+    'and', 'or', 'but', 'if', 'then', 'so', 'because', 'as', 'of', 'in', 'on',
+    'at', 'to', 'for', 'with', 'by', 'from', 'it', 'its', 'my', 'your', 'their'
+  ]);
+
+  // Split by spaces and common punctuation, keep meaningful words
+  const words = query
+    .split(/[\s,;:!?]+/)
+    .map(w => w.trim())
+    .filter(w => w.length > 2 && !stopwords.has(w.toLowerCase()));
+
+  // Also try to find multi-word phrases (e.g., "McKinsey & Company", "AI Learning Lab")
+  const phrases: string[] = [];
+
+  // Match quoted phrases or capitalized word sequences
+  const phraseMatches = query.match(/[A-Z][a-zA-Z]*(?:\s+(?:&|and)?\s*[A-Z][a-zA-Z]*)*/g);
+  if (phraseMatches) {
+    phrases.push(...phraseMatches.filter(p => p.length > 2));
+  }
+
+  // Combine words and phrases, remove duplicates
+  const allTerms = [...new Set([...phrases, ...words])];
+
+  console.log("Extracted search terms:", allTerms);
+  return allTerms.length > 0 ? allTerms : [query];
+};
+
 const generateSearchQueries = async (userQuery: string): Promise<string[]> => {
-    // ... [Same implementation] ...
-    const ai = initGenAI();
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: userQuery,
-            config: {
-                systemInstruction: "Generate 5-8 database search queries (keywords/entities) for the user input.",
-                responseMimeType: 'application/json',
-                responseSchema: { type: Type.OBJECT, properties: { queries: { type: Type.ARRAY, items: { type: Type.STRING } } } }
-            }
-        });
-        const parsed = cleanAndParseJSON(response.text || '{}');
-        return parsed.queries || [userQuery];
-    } catch (e) { return [userQuery]; }
+    // Primary: Extract keywords directly (fast, reliable, no API dependency)
+    const directKeywords = extractKeywordsFromQuery(userQuery);
+
+    // Return direct keywords - no need to wait for API
+    // This ensures search always works even if Gemini API is down
+    return directKeywords;
 };
 
 export const suggestRelationship = async (
