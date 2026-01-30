@@ -47,7 +47,7 @@ export const Register: React.FC = () => {
     } else {
       // Success - user is auto-logged in
       setSuccess(true);
-      setTimeout(() => navigate('/'), 1500);
+      setTimeout(() => navigate('/app'), 1500);
     }
   };
 

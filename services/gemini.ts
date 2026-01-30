@@ -1,9 +1,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { TableRow, AnalysisResult } from "../types";
+import { TableRow, AnalysisResult, AnchorNode } from "../types";
 import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile } from "./supabase";
 import { buildProfileContext } from "../utils/profileContext";
 import { getAnchors } from "./anchorService";
 import { buildAnchorContext, hasAnchors } from "../utils/anchorContext";
+import { buildExtractionPrompt, type PromptBuilderConfig } from "../utils/promptBuilder";
+import type { ExtractionSessionConfig, ExtractionMode, AnchorEmphasis } from "../types/extraction";
 
 const initGenAI = () => {
   const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
@@ -192,6 +194,8 @@ export interface ExtractionContext {
   title?: string;
   url?: string;
   customInstructions?: string;
+  // PRD 3: Extraction configuration options
+  extractionConfig?: ExtractionSessionConfig;
 }
 
 const COMMON_RELATIONS = [
@@ -373,25 +377,40 @@ const EXTRACTION_SCHEMA = {
 
 export const extractKnowledgeFromText = async (text: string, context?: ExtractionContext): Promise<ExtractedGraph> => {
   const ai = initGenAI();
-  let contextHeader = context ? `USER CONTEXT: Type: ${context.type}, Title: ${context.title || "Unknown"}` : "";
 
-  if (context?.customInstructions) {
-      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\nThe user has provided specific guidance for this extraction. Follow these rules STRICTLY:\n"${context.customInstructions}"\n`;
+  // Build system prompt using PRD 3 prompt builder if extraction config is provided
+  let systemPrompt: string;
+
+  // Always fetch profile and anchors
+  const userProfile = await fetchUserProfile();
+  let anchors: AnchorNode[] = [];
+  try {
+    anchors = await getAnchors();
+  } catch (err) {
+    console.warn('Failed to load anchors:', err);
   }
 
-  // Fetch user profile and build context
-  const userProfile = await fetchUserProfile();
-  const profileContext = buildProfileContext(userProfile);
-
-  // Fetch anchors and build anchor context
-  let anchorContext = '';
-  try {
-    const anchors = await getAnchors();
-    if (hasAnchors(anchors)) {
-      anchorContext = buildAnchorContext(anchors);
+  if (context?.extractionConfig) {
+    // Use new PRD 3 prompt builder
+    const config: PromptBuilderConfig = {
+      mode: context.extractionConfig.mode,
+      anchorEmphasis: context.extractionConfig.anchorEmphasis,
+      profile: userProfile,
+      anchors: anchors,
+      selectedAnchorIds: context.extractionConfig.selectedAnchorIds,
+      userGuidance: context.extractionConfig.userGuidance,
+      contextHeader: context ? `Source Type: ${context.type}, Title: ${context.title || "Unknown"}${context.url ? `, URL: ${context.url}` : ''}` : undefined
+    };
+    systemPrompt = buildExtractionPrompt(config);
+  } else {
+    // Fallback to legacy behavior for backward compatibility
+    let contextHeader = context ? `USER CONTEXT: Type: ${context.type}, Title: ${context.title || "Unknown"}` : "";
+    if (context?.customInstructions) {
+      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\nThe user has provided specific guidance for this extraction. Follow these rules STRICTLY:\n"${context.customInstructions}"\n`;
     }
-  } catch (err) {
-    console.warn('Failed to load anchor context:', err);
+    const profileContext = buildProfileContext(userProfile);
+    const anchorContext = hasAnchors(anchors) ? buildAnchorContext(anchors) : '';
+    systemPrompt = EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext;
   }
 
   try {
@@ -400,7 +419,7 @@ export const extractKnowledgeFromText = async (text: string, context?: Extractio
       contents: `Input Text:\n"""\n${text.slice(0, 25000)}\n"""`,
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
+        systemInstruction: systemPrompt,
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA
       }
@@ -420,27 +439,47 @@ export const extractKnowledgeFromText = async (text: string, context?: Extractio
   }
 };
 
-export const extractKnowledgeFromFile = async (base64Data: string, mimeType: string, filename: string, customInstructions?: string): Promise<ExtractedGraph> => {
+export const extractKnowledgeFromFile = async (
+  base64Data: string,
+  mimeType: string,
+  filename: string,
+  customInstructions?: string,
+  extractionConfig?: ExtractionSessionConfig
+): Promise<ExtractedGraph> => {
   const ai = initGenAI();
-  let contextHeader = `USER CONTEXT: Filename: ${filename}`;
 
-  if (customInstructions) {
-      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
+  // Always fetch profile and anchors
+  const userProfile = await fetchUserProfile();
+  let anchors: AnchorNode[] = [];
+  try {
+    anchors = await getAnchors();
+  } catch (err) {
+    console.warn('Failed to load anchors:', err);
   }
 
-  // Fetch user profile and build context
-  const userProfile = await fetchUserProfile();
-  const profileContext = buildProfileContext(userProfile);
+  let systemPrompt: string;
 
-  // Fetch anchors and build anchor context
-  let anchorContext = '';
-  try {
-    const anchors = await getAnchors();
-    if (hasAnchors(anchors)) {
-      anchorContext = buildAnchorContext(anchors);
+  if (extractionConfig) {
+    // Use new PRD 3 prompt builder
+    const config: PromptBuilderConfig = {
+      mode: extractionConfig.mode,
+      anchorEmphasis: extractionConfig.anchorEmphasis,
+      profile: userProfile,
+      anchors: anchors,
+      selectedAnchorIds: extractionConfig.selectedAnchorIds,
+      userGuidance: extractionConfig.userGuidance || customInstructions,
+      contextHeader: `Document: ${filename}`
+    };
+    systemPrompt = buildExtractionPrompt(config);
+  } else {
+    // Fallback to legacy behavior
+    let contextHeader = `USER CONTEXT: Filename: ${filename}`;
+    if (customInstructions) {
+      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
     }
-  } catch (err) {
-    console.warn('Failed to load anchor context:', err);
+    const profileContext = buildProfileContext(userProfile);
+    const anchorContext = hasAnchors(anchors) ? buildAnchorContext(anchors) : '';
+    systemPrompt = EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext;
   }
 
   try {
@@ -454,7 +493,7 @@ export const extractKnowledgeFromFile = async (base64Data: string, mimeType: str
       },
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
+        systemInstruction: systemPrompt,
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA
       }
@@ -474,27 +513,46 @@ export const extractKnowledgeFromFile = async (base64Data: string, mimeType: str
   }
 };
 
-export const extractKnowledgeFromWeb = async (url: string, title?: string, customInstructions?: string): Promise<ExtractedGraph> => {
+export const extractKnowledgeFromWeb = async (
+  url: string,
+  title?: string,
+  customInstructions?: string,
+  extractionConfig?: ExtractionSessionConfig
+): Promise<ExtractedGraph> => {
   const ai = initGenAI();
-  let contextHeader = `Target URL: ${url}`;
 
-  if (customInstructions) {
-      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
+  // Always fetch profile and anchors
+  const userProfile = await fetchUserProfile();
+  let anchors: AnchorNode[] = [];
+  try {
+    anchors = await getAnchors();
+  } catch (err) {
+    console.warn('Failed to load anchors:', err);
   }
 
-  // Fetch user profile and build context
-  const userProfile = await fetchUserProfile();
-  const profileContext = buildProfileContext(userProfile);
+  let systemPrompt: string;
 
-  // Fetch anchors and build anchor context
-  let anchorContext = '';
-  try {
-    const anchors = await getAnchors();
-    if (hasAnchors(anchors)) {
-      anchorContext = buildAnchorContext(anchors);
+  if (extractionConfig) {
+    // Use new PRD 3 prompt builder
+    const config: PromptBuilderConfig = {
+      mode: extractionConfig.mode,
+      anchorEmphasis: extractionConfig.anchorEmphasis,
+      profile: userProfile,
+      anchors: anchors,
+      selectedAnchorIds: extractionConfig.selectedAnchorIds,
+      userGuidance: extractionConfig.userGuidance || customInstructions,
+      contextHeader: `Web URL: ${url}${title ? `, Title: ${title}` : ''}`
+    };
+    systemPrompt = buildExtractionPrompt(config);
+  } else {
+    // Fallback to legacy behavior
+    let contextHeader = `Target URL: ${url}`;
+    if (customInstructions) {
+      contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
     }
-  } catch (err) {
-    console.warn('Failed to load anchor context:', err);
+    const profileContext = buildProfileContext(userProfile);
+    const anchorContext = hasAnchors(anchors) ? buildAnchorContext(anchors) : '';
+    systemPrompt = EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext;
   }
 
   try {
@@ -503,7 +561,7 @@ export const extractKnowledgeFromWeb = async (url: string, title?: string, custo
       contents: `Deep read this URL: ${url}. Extract knowledge.`,
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
+        systemInstruction: systemPrompt,
         tools: [{ googleSearch: {} }],
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA

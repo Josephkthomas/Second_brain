@@ -1,16 +1,20 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { 
-  Bot, ArrowRight, CheckCircle2, AlertCircle, Database, GitMerge, FileText, 
-  UploadCloud, Loader2, Sparkles, Cpu, BrainCircuit, User, Gavel, Lightbulb, 
+import {
+  Bot, ArrowRight, CheckCircle2, AlertCircle, Database, GitMerge, FileText,
+  UploadCloud, Loader2, Sparkles, Cpu, BrainCircuit, User, Gavel, Lightbulb,
   Target, Building, HelpCircle, AlertTriangle, CheckSquare, Square, X,
   ShieldAlert, Flag, Zap, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
   Youtube, StickyNote, Users, Link as LinkIcon, Calendar, Quote, PieChart, Network, Share2, Search,
-  Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, File,
-  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3
+  Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
+  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye
 } from 'lucide-react';
 import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledge, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch } from '../services/gemini';
 import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes } from '../services/supabase';
 import { getEntityConfig } from '../utils/theme';
+import { getExtractionSettingsOrDefaults } from '../services/extractionSettings';
+import { getAllExtractionModes } from '../config/extractionModes';
+import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '../types/extraction';
+import type { AnchorNode } from '../types';
 import clsx from 'clsx';
 
 interface InjectionHubProps {
@@ -101,10 +105,83 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
   // Existing Anchors (Loaded for reference/context)
   const [anchors, setAnchors] = useState<{ label: string; entity_type: string; id: string; description?: string }[]>([]);
 
+  // PRD 3: Advanced Extraction Options State
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [overrideMode, setOverrideMode] = useState<ExtractionMode | null>(null);
+  const [overrideAnchorEmphasis, setOverrideAnchorEmphasis] = useState<AnchorEmphasis | null>(null);
+  const [selectedAnchorIds, setSelectedAnchorIds] = useState<string[]>([]);
+  const [convertSourceToAnchor, setConvertSourceToAnchor] = useState(false);
+  const [sourceAnchorName, setSourceAnchorName] = useState('');
+  const [sourceAnchorType, setSourceAnchorType] = useState('Topic');
+  const [defaultExtractionSettings, setDefaultExtractionSettings] = useState<{
+    default_mode: ExtractionMode;
+    default_anchor_emphasis: AnchorEmphasis;
+  } | null>(null);
+  const extractionModes = getAllExtractionModes();
+
   useEffect(() => {
     loadAnchors();
+    loadDefaultExtractionSettings();
     generateSuggestions();
   }, []);
+
+  const loadDefaultExtractionSettings = async () => {
+    try {
+      const settings = await getExtractionSettingsOrDefaults();
+      setDefaultExtractionSettings({
+        default_mode: settings.default_mode,
+        default_anchor_emphasis: settings.default_anchor_emphasis
+      });
+    } catch (err) {
+      console.error('Failed to load extraction settings:', err);
+      setDefaultExtractionSettings({
+        default_mode: 'comprehensive',
+        default_anchor_emphasis: 'standard'
+      });
+    }
+  };
+
+  // Helper to get effective extraction mode
+  const getEffectiveMode = (): ExtractionMode => {
+    return overrideMode || defaultExtractionSettings?.default_mode || 'comprehensive';
+  };
+
+  // Helper to get effective anchor emphasis
+  const getEffectiveAnchorEmphasis = (): AnchorEmphasis => {
+    return overrideAnchorEmphasis || defaultExtractionSettings?.default_anchor_emphasis || 'standard';
+  };
+
+  // Toggle anchor selection for temporary focus
+  const handleToggleAnchorSelection = (anchorId: string) => {
+    setSelectedAnchorIds(prev =>
+      prev.includes(anchorId)
+        ? prev.filter(id => id !== anchorId)
+        : [...prev, anchorId]
+    );
+  };
+
+  // Build extraction session config
+  const buildExtractionConfig = (): ExtractionSessionConfig => ({
+    mode: getEffectiveMode(),
+    anchorEmphasis: getEffectiveAnchorEmphasis(),
+    userGuidance: customInstructions.trim() || undefined,
+    selectedAnchorIds: selectedAnchorIds.length > 0 ? selectedAnchorIds : undefined,
+    convertSourceToAnchor,
+    sourceAnchorName: convertSourceToAnchor ? sourceAnchorName : undefined,
+    sourceAnchorType: convertSourceToAnchor ? sourceAnchorType : undefined
+  });
+
+  // Reset advanced options when closing modal
+  const resetAdvancedOptions = () => {
+    setShowAdvancedOptions(false);
+    setOverrideMode(null);
+    setOverrideAnchorEmphasis(null);
+    setSelectedAnchorIds([]);
+    setConvertSourceToAnchor(false);
+    setSourceAnchorName('');
+    setSourceAnchorType('Topic');
+    setCustomInstructions('');
+  };
 
   const loadAnchors = async () => {
     const data = await fetchAnchors();
@@ -291,7 +368,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           } else {
               setInputText(result.content);
               setSourceType('Research');
-              await executePipeline(result.content, { type: 'Research', title: result.title, url: result.sourceUrl });
+              await executePipeline(result.content, { type: 'Research', title: result.title, url: result.sourceUrl, extractionConfig: buildExtractionConfig() });
           }
       } catch (err: any) {
           setSaveError(extractErrorMessage(err));
@@ -325,13 +402,15 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           const sourcesToProcess = foundSources.filter((_, i) => selectedSourceIndices.has(i));
           const graphs: ExtractedGraph[] = [];
           
+          const extractionConfig = buildExtractionConfig();
+
           addLog(`[Agent 1] Analyzing research summary...`);
-          graphs.push(await extractKnowledgeFromText(researchSummary, { type: 'Research', title: title + " (Summary)", url: url }));
+          graphs.push(await extractKnowledgeFromText(researchSummary, { type: 'Research', title: title + " (Summary)", url: url, extractionConfig }));
 
           for (const source of sourcesToProcess) {
               addLog(`[Agent 1] Reading source: ${source.title.slice(0, 30)}...`);
               try {
-                  graphs.push(await extractKnowledgeFromWeb(source.uri, source.title));
+                  graphs.push(await extractKnowledgeFromWeb(source.uri, source.title, undefined, extractionConfig));
               } catch (e) { addLog(`[Warning] Failed to read ${source.title}. Skipping.`); }
           }
           mergeAndContinue(graphs);
@@ -437,8 +516,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           
           setActiveAgent('Agent 1');
           addLog("Using Gemini Vision Pro for extraction...");
-          // Pass custom instructions to document extractor
-          const extracted = await extractKnowledgeFromFile(base64Data, attachedFile.type, attachedFile.name, customInstructions);
+          // Pass custom instructions and extraction config to document extractor
+          const extracted = await extractKnowledgeFromFile(base64Data, attachedFile.type, attachedFile.name, customInstructions, buildExtractionConfig());
           
           mergeAndContinue([extracted]);
       } catch (err: any) { 
@@ -518,11 +597,12 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
       setCurrentSourceId(null);
       setReviewTab('entities');
       
-      await executePipeline(inputText, { 
-          type: sourceType as any, 
-          title: title.trim() || undefined, 
+      await executePipeline(inputText, {
+          type: sourceType as any,
+          title: title.trim() || undefined,
           url: url.trim() || undefined,
-          customInstructions: customInstructions.trim() || undefined
+          customInstructions: customInstructions.trim() || undefined,
+          extractionConfig: buildExtractionConfig()
       });
   };
 
@@ -863,7 +943,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              {sourceType !== 'Research' && sourceType !== 'Anchor' && (
                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in">
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-2xl relative shadow-2xl flex flex-col max-h-[90vh]">
-                        <button onClick={() => setSourceType('Research')} className="absolute top-4 right-4 text-slate-500 hover:text-white"><X size={20}/></button>
+                        <button onClick={() => { setSourceType('Research'); resetAdvancedOptions(); }} className="absolute top-4 right-4 text-slate-500 hover:text-white"><X size={20}/></button>
                         <div className="flex items-center gap-3 mb-6">
                             <div className="p-3 bg-slate-800 rounded-lg text-cyan-400">
                                 {sourceType === 'YouTube' ? <Youtube size={24}/> : (sourceType === 'Meeting' ? <Users size={24}/> : (sourceType === 'Document' ? <FileText size={24}/> : <FileText size={24}/>))}
@@ -881,20 +961,178 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                             <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-cyan-500 outline-none"/>
                             
                             {sourceType === 'YouTube' && <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Video URL" className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-red-500 outline-none"/>}
-                            
-                            {/* NEW: Custom Instructions Field */}
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block flex items-center gap-1"><Edit3 size={12}/> Custom Extraction Instructions (Optional)</label>
-                                <textarea 
-                                    value={customInstructions}
-                                    onChange={(e) => setCustomInstructions(e.target.value)}
-                                    className="w-full h-20 bg-slate-950 border border-slate-700 rounded-lg p-3 text-slate-300 font-mono text-xs focus:border-indigo-500 outline-none resize-none" 
-                                    placeholder={
-                                        sourceType === 'YouTube' ? "e.g. Extract the 5 key takeaways and any book recommendations." :
-                                        sourceType === 'Meeting' ? "e.g. Focus on Action Items and assignees. Ignore pleasantries." :
-                                        "e.g. Extract all dates and financial figures specifically."
-                                    }
-                                />
+
+                            {/* PRD 3: Advanced Options Panel */}
+                            <div className="bg-slate-950 border border-slate-700 rounded-lg overflow-hidden">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                                    className="w-full flex items-center justify-between p-3 hover:bg-slate-900 transition-colors"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <Settings2 size={14} className="text-cyan-400" />
+                                        <span className="text-sm font-medium text-slate-300">Advanced Options</span>
+                                        <span className="text-[10px] text-slate-500">(Optional)</span>
+                                    </div>
+                                    {showAdvancedOptions ? (
+                                        <ChevronDown size={14} className="text-slate-500" />
+                                    ) : (
+                                        <ChevronRight size={14} className="text-slate-500" />
+                                    )}
+                                </button>
+
+                                {showAdvancedOptions && (
+                                    <div className="p-4 border-t border-slate-800 space-y-5">
+                                        {/* Extraction Mode Override */}
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">
+                                                Extraction Mode
+                                                <span className="text-slate-600 font-normal ml-2">
+                                                    (Default: {defaultExtractionSettings?.default_mode || 'comprehensive'})
+                                                </span>
+                                            </label>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                {extractionModes.map(mode => {
+                                                    const isSelected = overrideMode === mode.id;
+                                                    const isDefault = !overrideMode && defaultExtractionSettings?.default_mode === mode.id;
+                                                    return (
+                                                        <button
+                                                            key={mode.id}
+                                                            type="button"
+                                                            onClick={() => setOverrideMode(overrideMode === mode.id ? null : mode.id)}
+                                                            className={clsx(
+                                                                "text-left p-2 rounded-lg border transition-all",
+                                                                isSelected
+                                                                    ? "border-cyan-500 bg-cyan-900/20"
+                                                                    : isDefault
+                                                                    ? "border-cyan-500/30 bg-cyan-900/10"
+                                                                    : "border-slate-700 bg-slate-900 hover:border-slate-600"
+                                                            )}
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                {mode.id === 'comprehensive' && <Database size={12} className={isSelected ? "text-cyan-400" : "text-slate-500"} />}
+                                                                {mode.id === 'strategic' && <TrendingUp size={12} className={isSelected ? "text-cyan-400" : "text-slate-500"} />}
+                                                                {mode.id === 'actionable' && <CheckSquare size={12} className={isSelected ? "text-cyan-400" : "text-slate-500"} />}
+                                                                {mode.id === 'relational' && <Network size={12} className={isSelected ? "text-cyan-400" : "text-slate-500"} />}
+                                                                <span className={clsx("text-xs font-medium", isSelected ? "text-cyan-400" : "text-slate-300")}>
+                                                                    {mode.name}
+                                                                </span>
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">{mode.description}</p>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Custom Instructions */}
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block flex items-center gap-1">
+                                                <Edit3 size={10}/> Custom Guidance for This Source
+                                            </label>
+                                            <textarea
+                                                value={customInstructions}
+                                                onChange={(e) => setCustomInstructions(e.target.value)}
+                                                className="w-full h-16 bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-300 font-mono text-xs focus:border-cyan-500 outline-none resize-none"
+                                                placeholder={
+                                                    sourceType === 'YouTube' ? "e.g. Extract the 5 key takeaways and any book recommendations." :
+                                                    sourceType === 'Meeting' ? "e.g. Focus on Action Items and assignees. Ignore pleasantries." :
+                                                    "e.g. Extract all dates and financial figures specifically."
+                                                }
+                                            />
+                                        </div>
+
+                                        {/* Anchor Selection */}
+                                        {anchors.length > 0 && (
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">
+                                                    Focus on Specific Anchors
+                                                    <span className="text-slate-600 font-normal ml-2">(Optional - select to prioritize)</span>
+                                                </label>
+                                                <div className="space-y-1 max-h-32 overflow-y-auto">
+                                                    {anchors.map(anchor => (
+                                                        <label
+                                                            key={anchor.id}
+                                                            className="flex items-center gap-2 p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 cursor-pointer transition-colors"
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedAnchorIds.includes(anchor.id)}
+                                                                onChange={() => handleToggleAnchorSelection(anchor.id)}
+                                                                className="w-3 h-3"
+                                                            />
+                                                            <div className="flex-1 min-w-0">
+                                                                <span className="text-xs text-white truncate block">{anchor.label}</span>
+                                                                <span className="text-[10px] text-slate-500">{anchor.entity_type}</span>
+                                                            </div>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Anchor Emphasis Override */}
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">
+                                                Anchor Emphasis
+                                                <span className="text-slate-600 font-normal ml-2">
+                                                    (Default: {defaultExtractionSettings?.default_anchor_emphasis || 'standard'})
+                                                </span>
+                                            </label>
+                                            <select
+                                                value={overrideAnchorEmphasis || ''}
+                                                onChange={(e) => setOverrideAnchorEmphasis(e.target.value ? e.target.value as AnchorEmphasis : null)}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-300 text-xs focus:border-cyan-500 outline-none"
+                                            >
+                                                <option value="">Use default ({defaultExtractionSettings?.default_anchor_emphasis || 'standard'})</option>
+                                                <option value="passive">Passive - Note obvious connections</option>
+                                                <option value="standard">Standard - Actively look for connections</option>
+                                                <option value="aggressive">Aggressive - Strongly prioritize anchors</option>
+                                            </select>
+                                        </div>
+
+                                        {/* Convert Source to Anchor */}
+                                        <div className="bg-amber-950/20 border border-amber-900/30 rounded-lg p-3">
+                                            <label className="flex items-start gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={convertSourceToAnchor}
+                                                    onChange={(e) => setConvertSourceToAnchor(e.target.checked)}
+                                                    className="mt-0.5"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="text-amber-400 text-xs font-medium flex items-center gap-1">
+                                                        <Anchor size={10} />
+                                                        Convert This Source to an Anchor
+                                                    </div>
+                                                    <div className="text-amber-300/60 text-[10px] mt-0.5">
+                                                        Create an anchor representing the main theme. Future content will be evaluated against it.
+                                                    </div>
+                                                    {convertSourceToAnchor && (
+                                                        <div className="mt-2 space-y-2">
+                                                            <input
+                                                                type="text"
+                                                                value={sourceAnchorName}
+                                                                onChange={(e) => setSourceAnchorName(e.target.value)}
+                                                                placeholder="Anchor name (e.g., 'Product Strategy Discussion')"
+                                                                className="w-full bg-slate-900 border border-amber-500/30 rounded-lg p-2 text-white text-xs placeholder-slate-500 focus:border-amber-500 outline-none"
+                                                            />
+                                                            <select
+                                                                value={sourceAnchorType}
+                                                                onChange={(e) => setSourceAnchorType(e.target.value)}
+                                                                className="w-full bg-slate-900 border border-amber-500/30 rounded-lg p-2 text-slate-300 text-xs focus:border-amber-500 outline-none"
+                                                            >
+                                                                <option value="Topic">Topic</option>
+                                                                <option value="Project">Project</option>
+                                                                <option value="Goal">Goal</option>
+                                                            </select>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {sourceType === 'Document' ? (
@@ -908,7 +1146,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                             )}
                             
                             <div className="flex justify-end gap-3 pt-2">
-                                <button onClick={() => setSourceType('Research')} className="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
+                                <button onClick={() => { setSourceType('Research'); resetAdvancedOptions(); }} className="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
                                 <button onClick={handleAnalyze} disabled={sourceType !== 'Document' && !inputText.trim()} className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-2 rounded-lg font-bold transition-colors">
                                     {sourceType === 'Document' ? 'Process Document' : 'Process Data'}
                                 </button>

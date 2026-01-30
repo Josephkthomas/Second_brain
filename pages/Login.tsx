@@ -31,8 +31,8 @@ export const Login: React.FC = () => {
       setError(error.message || 'Invalid email or password');
       setLoading(false);
     } else {
-      // Success - AuthContext will handle redirect via ProtectedRoute
-      navigate('/');
+      // Success - navigate to the main app
+      navigate('/app');
     }
   };
 

@@ -232,3 +232,50 @@ export const getAnchorConnectionInfo = async (): Promise<AnchorConnectionInfo[]>
 
   return connectionInfo.sort((a, b) => b.connection_count - a.connection_count);
 };
+
+/**
+ * Create an anchor from a source (used when "Convert to Anchor" is enabled)
+ * This creates a new anchor node linked to the source
+ */
+export const createAnchorFromSource = async (
+  anchorName: string,
+  entityType: string,
+  sourceId: string,
+  sourceTitle: string,
+  description?: string,
+  strength?: number
+): Promise<{ data: AnchorNode | null; error: any }> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+
+  if (!userId) {
+    return { data: null, error: new Error('Not authenticated') };
+  }
+
+  const anchorDescription = description || `Anchor created from source: ${sourceTitle}`;
+
+  const { data, error } = await client
+    .from('knowledge_nodes')
+    .insert({
+      label: anchorName,
+      entity_type: entityType,
+      description: anchorDescription,
+      is_anchor: true,
+      anchor_strength: strength || 3, // Default medium priority
+      anchor_created_at: new Date().toISOString(),
+      confidence: 1.0,
+      source: sourceTitle,
+      source_type: 'Source Conversion',
+      source_id: sourceId,
+      user_id: userId
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Failed to create anchor from source:', error);
+    return { data: null, error };
+  }
+
+  return { data: data as AnchorNode, error: null };
+};

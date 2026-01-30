@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+
+// Lazy load the landing page for better initial performance
+const LandingPage = lazy(() => import('./pages/LandingPage'));
 import { Sidebar } from './components/Sidebar';
 import { DataGrid } from './components/DataGrid';
 import { AIAnalyst } from './components/AIAnalyst';
@@ -13,12 +16,13 @@ import { ChatInterface } from './components/ChatInterface';
 import { SourceLog } from './components/SourceLog';
 import { UserProfileSettings } from './components/UserProfileSettings';
 import { AnchorManager } from './components/AnchorManager';
+import { ExtractionSettings } from './components/ExtractionSettings';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -42,6 +46,7 @@ const MainApp: React.FC = () => {
   const [showInjectionHub, setShowInjectionHub] = useState(false);
   const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [showAnchorManager, setShowAnchorManager] = useState(false);
+  const [showExtractionSettings, setShowExtractionSettings] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
   
@@ -361,10 +366,17 @@ const MainApp: React.FC = () => {
                </div>
                <button
                  onClick={() => setShowAnchorManager(true)}
-                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyber-cyan transition-colors"
+                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-amber-400 transition-colors"
                  title="Anchor Manager"
                >
                   <Anchor size={16} />
+               </button>
+               <button
+                 onClick={() => setShowExtractionSettings(true)}
+                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyan-400 transition-colors"
+                 title="Extraction Settings"
+               >
+                  <Zap size={16} />
                </button>
                <button
                  onClick={() => setShowProfileSettings(true)}
@@ -495,9 +507,25 @@ const MainApp: React.FC = () => {
         onClose={() => setShowAnchorManager(false)}
         onAnchorUpdate={() => setGraphRefreshTrigger(prev => prev + 1)}
       />
+
+      {/* 10. EXTRACTION SETTINGS */}
+      <ExtractionSettings
+        isOpen={showExtractionSettings}
+        onClose={() => setShowExtractionSettings(false)}
+      />
     </div>
   );
 };
+
+// Loading fallback for lazy-loaded components
+const PageLoader: React.FC = () => (
+  <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+    <div className="text-center">
+      <div className="w-12 h-12 border-4 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin mx-auto mb-4" />
+      <p className="text-slate-400 text-sm">Loading...</p>
+    </div>
+  </div>
+);
 
 // Main App component with routing
 const App: React.FC = () => {
@@ -505,17 +533,37 @@ const App: React.FC = () => {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          {/* Public landing page */}
           <Route
             path="/"
+            element={
+              <Suspense fallback={<PageLoader />}>
+                <LandingPage />
+              </Suspense>
+            }
+          />
+
+          {/* Auth routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+
+          {/* Protected dashboard/app route */}
+          <Route
+            path="/app"
             element={
               <ProtectedRoute>
                 <MainApp />
               </ProtectedRoute>
             }
           />
-          {/* Catch-all redirect to home */}
+
+          {/* Legacy redirect - old "/" protected route now at "/app" */}
+          <Route
+            path="/dashboard"
+            element={<Navigate to="/app" replace />}
+          />
+
+          {/* Catch-all redirect to landing */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
