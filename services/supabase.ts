@@ -217,9 +217,8 @@ export const fetchRelevantNodes = async (keywords: string[]): Promise<{ label: s
   const { data, error } = await client
     .from('knowledge_nodes')
     .select('id, label, entity_type, description')
-    .neq('entity_type', 'Anchor')
     .or(query)
-    .limit(30); // Return top 30 matches
+    .limit(30); // Return top 30 matches (including Anchors)
   
   if (error) {
     console.warn("Smart context search failed, falling back to recent.", error);
