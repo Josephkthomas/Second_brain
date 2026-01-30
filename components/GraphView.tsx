@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { fetchTableData, deleteRows, insertRows, mergeNodes } from '../services/supabase';
 import { generateCrossConnections, suggestRelationship } from '../services/gemini';
+import { promoteToAnchor, demoteFromAnchor } from '../services/anchorService';
 import { GraphConfig, GraphNode, GraphLink, LensType } from '../types';
 import { LENS_CONFIG } from '../constants';
 import { getEntityConfig, ENTITY_THEME } from '../utils/theme';
@@ -781,6 +782,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const [showEnrichmentModal, setShowEnrichmentModal] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
 
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
+
   // Omnibar State
   const [omnibarOpen, setOmnibarOpen] = useState(false);
   const [omnibarQuery, setOmnibarQuery] = useState('');
@@ -1111,6 +1115,24 @@ export const GraphView: React.FC<GraphViewProps> = ({
           loadGraphData();
           setSelectedNode(null);
       }
+  };
+
+  const handleToggleAnchor = async (node: GraphNode) => {
+    const isCurrentlyAnchor = node.data?.is_anchor || node.type === 'Anchor';
+    if (isCurrentlyAnchor) {
+      const { error } = await demoteFromAnchor(node.id);
+      if (!error) {
+        loadGraphData();
+        setSelectedNode(null);
+      }
+    } else {
+      const { error } = await promoteToAnchor(node.id);
+      if (!error) {
+        loadGraphData();
+        setSelectedNode(null);
+      }
+    }
+    setContextMenu(null);
   };
 
   const { visibilityMap, depthMap } = useMemo(() => {
@@ -1624,7 +1646,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
       .call(drag(simulation) as any)
       .on("contextmenu", (event, d) => {
           event.preventDefault();
-          togglePin(d);
+          event.stopPropagation();
+          setContextMenu({ x: event.clientX, y: event.clientY, node: d });
       })
       .on("click", (event, d) => {
         event.stopPropagation();
@@ -2785,6 +2808,53 @@ export const GraphView: React.FC<GraphViewProps> = ({
              </div>
            )}
       </div>
+      )}
+
+      {/* Context Menu for Nodes */}
+      {contextMenu && (
+        <div
+          className="fixed z-[9999] bg-cyber-slate/95 backdrop-blur-md border border-white/20 rounded-lg shadow-2xl py-1 min-w-[160px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              togglePin(contextMenu.node);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+          >
+            <Pin size={14} className={contextMenu.node.fx != null ? 'text-amber-400' : ''} />
+            {contextMenu.node.fx != null ? 'Unpin Node' : 'Pin Node'}
+          </button>
+          <div className="border-t border-white/10 my-1" />
+          <button
+            onClick={() => handleToggleAnchor(contextMenu.node)}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+          >
+            <Anchor size={14} className={(contextMenu.node.data?.is_anchor || contextMenu.node.type === 'Anchor') ? 'text-cyber-cyan' : ''} />
+            {(contextMenu.node.data?.is_anchor || contextMenu.node.type === 'Anchor') ? 'Demote from Anchor' : 'Promote to Anchor'}
+          </button>
+          <div className="border-t border-white/10 my-1" />
+          <button
+            onClick={() => {
+              handleDeleteNode(contextMenu.node);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors"
+          >
+            <Trash2 size={14} />
+            Delete Node
+          </button>
+        </div>
+      )}
+
+      {/* Click outside to close context menu */}
+      {contextMenu && (
+        <div
+          className="fixed inset-0 z-[9998]"
+          onClick={() => setContextMenu(null)}
+        />
       )}
     </div>
   );

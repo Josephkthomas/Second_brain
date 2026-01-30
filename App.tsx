@@ -11,12 +11,14 @@ import { GraphView } from './components/GraphView';
 import { InjectionHub } from './components/InjectionHub';
 import { ChatInterface } from './components/ChatInterface';
 import { SourceLog } from './components/SourceLog';
+import { UserProfileSettings } from './components/UserProfileSettings';
+import { AnchorManager } from './components/AnchorManager';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -38,6 +40,8 @@ const MainApp: React.FC = () => {
   const [showDataVault, setShowDataVault] = useState(false);
   const [showSourceLog, setShowSourceLog] = useState(false);
   const [showInjectionHub, setShowInjectionHub] = useState(false);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
+  const [showAnchorManager, setShowAnchorManager] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
   
@@ -356,6 +360,20 @@ const MainApp: React.FC = () => {
                   </span>
                </div>
                <button
+                 onClick={() => setShowAnchorManager(true)}
+                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyber-cyan transition-colors"
+                 title="Anchor Manager"
+               >
+                  <Anchor size={16} />
+               </button>
+               <button
+                 onClick={() => setShowProfileSettings(true)}
+                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyber-cyan transition-colors"
+                 title="Profile Settings"
+               >
+                  <Settings size={16} />
+               </button>
+               <button
                  onClick={signOut}
                  className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
                  title="Sign out"
@@ -458,11 +476,24 @@ const MainApp: React.FC = () => {
       />
 
       {/* 7. CHAT INTERFACE */}
-      <ChatInterface 
-        isOpen={isChatOpen} 
+      <ChatInterface
+        isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
         traceNode={traceNode}
         onNodeSelect={handleChatNodeSelect}
+      />
+
+      {/* 8. USER PROFILE SETTINGS */}
+      <UserProfileSettings
+        isOpen={showProfileSettings}
+        onClose={() => setShowProfileSettings(false)}
+      />
+
+      {/* 9. ANCHOR MANAGER */}
+      <AnchorManager
+        isOpen={showAnchorManager}
+        onClose={() => setShowAnchorManager(false)}
+        onAnchorUpdate={() => setGraphRefreshTrigger(prev => prev + 1)}
       />
     </div>
   );

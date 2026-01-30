@@ -1,6 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TableRow, AnalysisResult } from "../types";
-import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings } from "./supabase";
+import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile } from "./supabase";
+import { buildProfileContext } from "../utils/profileContext";
+import { getAnchors } from "./anchorService";
+import { buildAnchorContext, hasAnchors } from "../utils/anchorContext";
 
 const initGenAI = () => {
   const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
@@ -371,18 +374,33 @@ const EXTRACTION_SCHEMA = {
 export const extractKnowledgeFromText = async (text: string, context?: ExtractionContext): Promise<ExtractedGraph> => {
   const ai = initGenAI();
   let contextHeader = context ? `USER CONTEXT: Type: ${context.type}, Title: ${context.title || "Unknown"}` : "";
-  
+
   if (context?.customInstructions) {
       contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\nThe user has provided specific guidance for this extraction. Follow these rules STRICTLY:\n"${context.customInstructions}"\n`;
   }
 
+  // Fetch user profile and build context
+  const userProfile = await fetchUserProfile();
+  const profileContext = buildProfileContext(userProfile);
+
+  // Fetch anchors and build anchor context
+  let anchorContext = '';
+  try {
+    const anchors = await getAnchors();
+    if (hasAnchors(anchors)) {
+      anchorContext = buildAnchorContext(anchors);
+    }
+  } catch (err) {
+    console.warn('Failed to load anchor context:', err);
+  }
+
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
+      model: 'gemini-3-flash-preview',
       contents: `Input Text:\n"""\n${text.slice(0, 25000)}\n"""`,
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader,
+        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA
       }
@@ -405,14 +423,29 @@ export const extractKnowledgeFromText = async (text: string, context?: Extractio
 export const extractKnowledgeFromFile = async (base64Data: string, mimeType: string, filename: string, customInstructions?: string): Promise<ExtractedGraph> => {
   const ai = initGenAI();
   let contextHeader = `USER CONTEXT: Filename: ${filename}`;
-  
+
   if (customInstructions) {
       contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
   }
 
+  // Fetch user profile and build context
+  const userProfile = await fetchUserProfile();
+  const profileContext = buildProfileContext(userProfile);
+
+  // Fetch anchors and build anchor context
+  let anchorContext = '';
+  try {
+    const anchors = await getAnchors();
+    if (hasAnchors(anchors)) {
+      anchorContext = buildAnchorContext(anchors);
+    }
+  } catch (err) {
+    console.warn('Failed to load anchor context:', err);
+  }
+
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
@@ -421,7 +454,7 @@ export const extractKnowledgeFromFile = async (base64Data: string, mimeType: str
       },
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader,
+        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA
       }
@@ -444,18 +477,33 @@ export const extractKnowledgeFromFile = async (base64Data: string, mimeType: str
 export const extractKnowledgeFromWeb = async (url: string, title?: string, customInstructions?: string): Promise<ExtractedGraph> => {
   const ai = initGenAI();
   let contextHeader = `Target URL: ${url}`;
-  
+
   if (customInstructions) {
       contextHeader += `\n\n### USER CUSTOM EXTRACTION INSTRUCTIONS (IMPORTANT):\n"${customInstructions}"\n`;
   }
 
+  // Fetch user profile and build context
+  const userProfile = await fetchUserProfile();
+  const profileContext = buildProfileContext(userProfile);
+
+  // Fetch anchors and build anchor context
+  let anchorContext = '';
+  try {
+    const anchors = await getAnchors();
+    if (hasAnchors(anchors)) {
+      anchorContext = buildAnchorContext(anchors);
+    }
+  } catch (err) {
+    console.warn('Failed to load anchor context:', err);
+  }
+
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
+      model: 'gemini-3-flash-preview',
       contents: `Deep read this URL: ${url}. Extract knowledge.`,
       config: {
         temperature: 0.1,
-        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader,
+        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION + "\n" + contextHeader + profileContext + anchorContext,
         tools: [{ googleSearch: {} }],
         responseMimeType: 'application/json',
         responseSchema: EXTRACTION_SCHEMA

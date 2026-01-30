@@ -134,14 +134,17 @@ export const mergeNodes = async (keepNodeId: string, discardNodeId: string): Pro
 };
 
 // NEW: Fetch Anchors (High Priority Nodes)
-export const fetchAnchors = async (): Promise<{ label: string; entity_type: string; id: string; description?: string }[]> => {
+// Updated to use is_anchor field instead of entity_type
+export const fetchAnchors = async (): Promise<{ label: string; entity_type: string; id: string; description?: string; is_anchor?: boolean; anchor_strength?: number; anchor_created_at?: string }[]> => {
   const client = getSupabase();
-  
+
   const { data, error } = await client
     .from('knowledge_nodes')
-    .select('id, label, entity_type, description')
-    .eq('entity_type', 'Anchor');
-  
+    .select('id, label, entity_type, description, is_anchor, anchor_strength, anchor_created_at')
+    .eq('is_anchor', true)
+    .order('anchor_strength', { ascending: false, nullsFirst: false })
+    .order('anchor_created_at', { ascending: false });
+
   if (error) {
     console.warn("Failed to fetch anchors", error);
     return [];
@@ -150,7 +153,8 @@ export const fetchAnchors = async (): Promise<{ label: string; entity_type: stri
 };
 
 // NEW: Create Anchor
-export const createAnchor = async (label: string, type: string, description: string): Promise<{ data: any, error: any }> => {
+// Updated to use is_anchor field and preserve actual entity_type
+export const createAnchor = async (label: string, entityType: string, description: string, strength?: number): Promise<{ data: any, error: any }> => {
   const client = getSupabase();
 
   // Add user_id for authenticated insert
@@ -159,12 +163,13 @@ export const createAnchor = async (label: string, type: string, description: str
     return { data: null, error: new Error('Not authenticated') };
   }
 
-  const enhancedDescription = `[Type: ${type}] ${description}`;
-
   const { data, error } = await client.from('knowledge_nodes').insert({
     label,
-    entity_type: 'Anchor',
-    description: enhancedDescription,
+    entity_type: entityType,
+    description: description || null,
+    is_anchor: true,
+    anchor_strength: strength || null,
+    anchor_created_at: new Date().toISOString(),
     confidence: 1.0,
     source: 'User Manual Entry',
     source_type: 'Manual',
@@ -179,10 +184,10 @@ export const fetchExistingNodes = async (): Promise<{ label: string; entity_type
   const { data, error } = await client
     .from('knowledge_nodes')
     .select('id, label, entity_type, description')
-    .neq('entity_type', 'Anchor') 
+    .or('is_anchor.is.null,is_anchor.eq.false')
     .order('created_at', { ascending: false })
-    .limit(100); 
-  
+    .limit(100);
+
   if (error) {
     console.error("Failed to fetch existing nodes", error);
     return [];
@@ -431,4 +436,82 @@ export const semanticSearchNodes = async (embedding: number[], matchThreshold: n
 
   console.log(`Semantic search returned ${data?.length || 0} results (threshold: ${matchThreshold})`);
   return data || [];
+};
+
+// --- USER PROFILE MANAGEMENT ---
+
+export interface UserProfile {
+  id?: string;
+  user_id?: string;
+  professional_context: {
+    role?: string;
+    industry?: string;
+    current_projects?: string;
+  };
+  personal_interests: {
+    topics?: string;
+    learning_goals?: string;
+  };
+  processing_preferences: {
+    insight_depth?: 'detailed' | 'high-level' | '';
+    relationship_focus?: 'broad' | 'deep' | '';
+  };
+  created_at?: string;
+  updated_at?: string;
+}
+
+export const fetchUserProfile = async (): Promise<UserProfile | null> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return null;
+
+  const { data, error } = await client
+    .from('user_profiles')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    // Profile doesn't exist, create it
+    if (error.code === 'PGRST116') {
+      const { data: newProfile, error: insertError } = await client
+        .from('user_profiles')
+        .insert({
+          user_id: userId,
+          professional_context: {},
+          personal_interests: {},
+          processing_preferences: {}
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("Failed to create user profile:", insertError);
+        return null;
+      }
+      return newProfile as UserProfile;
+    }
+    console.error("Failed to fetch user profile:", error);
+    return null;
+  }
+
+  return data as UserProfile;
+};
+
+export const updateUserProfile = async (updates: Partial<UserProfile>): Promise<{ error: any }> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { error: new Error('Not authenticated') };
+  }
+
+  const { error } = await client
+    .from('user_profiles')
+    .update({
+      ...updates,
+      updated_at: new Date().toISOString()
+    })
+    .eq('user_id', userId);
+
+  return { error };
 };

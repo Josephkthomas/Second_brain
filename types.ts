@@ -33,6 +33,32 @@ export interface GraphNode extends SimulationNodeDatum {
   // New specific fields for graph logic
   source_id?: string;
   user_tags?: string[]; // Custom user defined tags
+  // Anchor fields
+  is_anchor?: boolean;
+  anchor_strength?: number | null; // 1-5 priority scale
+  anchor_created_at?: string | null;
+}
+
+// Anchor-specific types
+export interface AnchorNode extends GraphNode {
+  is_anchor: true;
+  anchor_created_at: string;
+}
+
+export interface AnchorStats {
+  total_anchors: number;
+  anchors_by_type: Record<string, number>;
+  average_strength: number;
+  oldest_anchor: AnchorNode | null;
+  newest_anchor: AnchorNode | null;
+}
+
+export interface AnchorConnectionInfo {
+  anchor_id: string;
+  anchor_label: string;
+  entity_type: string;
+  connection_count: number;
+  direct_connections: number;
 }
 
 export interface GraphLink extends SimulationLinkDatum<GraphNode> {
