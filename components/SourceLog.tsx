@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, Search, Youtube, Users, FileText, Globe, 
+import {
+  BookOpen, Search, Youtube, Users, FileText, Globe,
   StickyNote, ChevronRight, X, Clock, ExternalLink, Filter,
-  PlayCircle
+  PlayCircle, Tag, Hash
 } from 'lucide-react';
 import { fetchAllSources } from '../services/supabase';
 import clsx from 'clsx';
@@ -23,7 +23,20 @@ export const SourceLog: React.FC<SourceLogProps> = ({
   const [sources, setSources] = useState<{ id: string, title: string, source_type: string, source_url?: string, metadata?: any, created_at: string }[]>([]);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<string>('All');
+  const [filterTag, setFilterTag] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Extract unique tags from all sources
+  const allTags = React.useMemo(() => {
+    const tagSet = new Set<string>();
+    sources.forEach(s => {
+      const tags = s.metadata?.tags;
+      if (Array.isArray(tags)) {
+        tags.forEach((t: string) => tagSet.add(t));
+      }
+    });
+    return Array.from(tagSet).sort();
+  }, [sources]);
 
   useEffect(() => {
     if (isOpen) {
@@ -41,7 +54,8 @@ export const SourceLog: React.FC<SourceLogProps> = ({
   const filteredSources = sources.filter(s => {
     const matchesSearch = s.title.toLowerCase().includes(search.toLowerCase());
     const matchesType = filterType === 'All' || s.source_type.toLowerCase() === filterType.toLowerCase();
-    return matchesSearch && matchesType;
+    const matchesTag = !filterTag || (Array.isArray(s.metadata?.tags) && s.metadata.tags.includes(filterTag));
+    return matchesSearch && matchesType && matchesTag;
   });
 
   const getSourceIcon = (type: string) => {
@@ -120,8 +134,8 @@ export const SourceLog: React.FC<SourceLogProps> = ({
                             onClick={() => setFilterType(type)}
                             className={clsx(
                                 "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap border transition-all",
-                                filterType === type 
-                                    ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50" 
+                                filterType === type
+                                    ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50"
                                     : "bg-transparent text-slate-500 border-transparent hover:bg-white/5"
                             )}
                         >
@@ -129,6 +143,41 @@ export const SourceLog: React.FC<SourceLogProps> = ({
                         </button>
                     ))}
                 </div>
+
+                {/* Tag Filter */}
+                {allTags.length > 0 && (
+                    <div className="pt-2 border-t border-white/5">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Tag size={12} className="text-slate-500" />
+                            <span className="text-[10px] text-slate-500 uppercase tracking-wider">Filter by Tag</span>
+                            {filterTag && (
+                                <button
+                                    onClick={() => setFilterTag(null)}
+                                    className="ml-auto text-[10px] text-cyan-400 hover:text-white"
+                                >
+                                    Clear
+                                </button>
+                            )}
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                            {allTags.map(tag => (
+                                <button
+                                    key={tag}
+                                    onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+                                    className={clsx(
+                                        "px-2 py-1 rounded text-[10px] font-medium border transition-all flex items-center gap-1",
+                                        filterTag === tag
+                                            ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50"
+                                            : "bg-slate-800/50 text-slate-400 border-slate-700 hover:bg-slate-700"
+                                    )}
+                                >
+                                    <Hash size={10} />
+                                    {tag}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* List */}
@@ -211,6 +260,24 @@ export const SourceLog: React.FC<SourceLogProps> = ({
                                         {source.metadata && source.metadata.query && (
                                             <div className="text-[10px] text-slate-500 italic mb-2 truncate">
                                                 Query: "{source.metadata.query}"
+                                            </div>
+                                        )}
+
+                                        {/* Tags Display */}
+                                        {source.metadata?.tags && Array.isArray(source.metadata.tags) && source.metadata.tags.length > 0 && (
+                                            <div className="flex gap-1 flex-wrap mb-2">
+                                                {source.metadata.tags.slice(0, 4).map((tag: string) => (
+                                                    <span
+                                                        key={tag}
+                                                        className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-cyan-900/30 text-cyan-400 border border-cyan-800/50 flex items-center gap-0.5"
+                                                    >
+                                                        <Hash size={8} />
+                                                        {tag}
+                                                    </span>
+                                                ))}
+                                                {source.metadata.tags.length > 4 && (
+                                                    <span className="text-[9px] text-slate-500">+{source.metadata.tags.length - 4}</span>
+                                                )}
                                             </div>
                                         )}
 

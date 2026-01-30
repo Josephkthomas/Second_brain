@@ -9,7 +9,7 @@ import {
   Library, MonitorPlay, FilePlus, PenTool, Layers
 } from 'lucide-react';
 import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledge, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext } from '../services/gemini';
-import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources } from '../services/supabase';
+import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId } from '../services/supabase';
 import { getEntityConfig } from '../utils/theme';
 import clsx from 'clsx';
 
@@ -130,9 +130,15 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     setIsSavingAnchor(true);
     setSaveError(null);
     setAnchorStatusMessage('Creating Anchor...');
-    
+
     try {
         const supabase = getSupabase();
+
+        // Get current user for authenticated inserts
+        const userId = await getCurrentUserId();
+        if (!userId) {
+          throw new Error('Not authenticated');
+        }
         
         // 1. Create the Anchor Node
         const { data: newAnchor, error } = await createAnchor(anchorName.trim(), anchorType, anchorDescription.trim());
@@ -156,7 +162,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     target_node_id: c.target_node_id,
                     relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
                     evidence: c.evidence,
-                    weight: 1
+                    weight: 1,
+                    user_id: userId,
                  }));
 
                  await supabase.from('knowledge_edges').insert(edgesToInsert);
@@ -192,7 +199,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                             source: source.title || 'Retroactive Mining',
                             source_type: 'Inferred',
                             source_id: source.id, // Link back to original source if possible
-                            quote: n.quote
+                            quote: n.quote,
+                            user_id: userId,
                         })))
                         .select('id, label');
 
@@ -206,7 +214,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                                     target_node_id: targetNode.id,
                                     relation_type: e.relation.toLowerCase().replace(/\s+/g, '_'),
                                     evidence: e.evidence,
-                                    weight: 1
+                                    weight: 1,
+                                    user_id: userId,
                                 };
                             }
                             return null;
@@ -325,7 +334,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
               focus: researchFocus,
               depth: researchDepth,
               query: researchQuery,
-              child_source_count: selectedSourceIndices.size
+              child_source_count: selectedSourceIndices.size,
+              tags: globalTags
           };
           
           addLog("Archiving research session...");
@@ -495,7 +505,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           const base64String = await blobToBase64(file);
           const base64Data = base64String.split(',')[1];
           
-          const metadata = { filename: file.name, filetype: file.type, size: file.size };
+          const metadata = { filename: file.name, filetype: file.type, size: file.size, tags: globalTags };
           const { id: sourceId } = await saveKnowledgeSource(
               file.name,
               "Binary Document Data",
@@ -586,9 +596,10 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     try {
       addLog("Archiving source to deep storage...");
       
-      const initialMetadata = { 
+      const initialMetadata = {
           processed_at: new Date().toISOString(),
-          agent_version: 'v2.0'
+          agent_version: 'v2.0',
+          tags: globalTags
       };
 
       const { id: sourceId } = await saveKnowledgeSource(
@@ -737,7 +748,15 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     setStep('saving');
     setSaveError(null);
     const supabase = getSupabase();
-    
+
+    // Get current user for authenticated inserts
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      setSaveError('Not authenticated');
+      setStep('review');
+      return;
+    }
+
     try {
       const nodesToInsertPayload = extractedData.nodes.filter((_, i) => selectedIndices.has(i));
       
@@ -791,7 +810,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                 source_id: currentSourceId, // Link Node to Source ID
                 tags: n.tags || [],
                 user_tags: finalUserTags, // INSERT MERGED CUSTOM USER TAGS
-                quote: n.quote || null
+                quote: n.quote || null,
+                user_id: userId,
             };
           }))
           .select('id, label');
@@ -810,7 +830,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
               target_node_id: targetId,
               relation_type: edge.relation.toLowerCase().replace(/\s+/g, '_'),
               evidence: edge.evidence,
-              weight: 1
+              weight: 1,
+              user_id: userId,
             };
           }
           return null;
@@ -1386,7 +1407,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                  <div className="space-y-1.5 absolute bottom-4 left-4 right-4">
                     {logs.map((log, i) => (
                       <div key={i} className="animate-in slide-in-from-bottom-2 fade-in flex items-start">
-                        <span className="text-cyan-500 mr-2 shrink-0">>></span>
+                        <span className="text-cyan-500 mr-2 shrink-0">{'>>'}</span>
                         <span className="text-slate-300">{log}</span>
                       </div>
                     ))}

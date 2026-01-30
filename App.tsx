@@ -1,4 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { Login } from './pages/Login';
+import { Register } from './pages/Register';
 import { Sidebar } from './components/Sidebar';
 import { DataGrid } from './components/DataGrid';
 import { AIAnalyst } from './components/AIAnalyst';
@@ -9,9 +14,9 @@ import { SourceLog } from './components/SourceLog';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
-import { 
-  RefreshCw, Sparkles, BrainCircuit, X, Database, Search, 
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen
+import {
+  RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -26,7 +31,8 @@ const LENS_ICONS: Record<LensType, any> = {
   'AnchorFocus': Scan
 };
 
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
+  const { signOut, user } = useAuth();
   // Navigation State
   const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
   const [showDataVault, setShowDataVault] = useState(false);
@@ -339,14 +345,23 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            {/* User & Share */}
+            {/* User & Sign Out */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
-               <div className="flex -space-x-2 px-2">
-                  <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">JD</div>
-                  <div className="w-8 h-8 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold text-black">AI</div>
+               <div className="flex items-center gap-2 px-2">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">
+                    {user?.email?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                  <span className="text-xs text-slate-400 max-w-[120px] truncate hidden sm:block" title={user?.email || ''}>
+                    {user?.email}
+                  </span>
                </div>
-               <button className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-md text-xs font-bold transition-colors">
-                  Share
+               <button
+                 onClick={signOut}
+                 className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                 title="Sign out"
+               >
+                  <LogOut size={14} />
+                  <span className="hidden sm:inline">Sign Out</span>
                </button>
             </div>
         </div>
@@ -450,6 +465,30 @@ const App: React.FC = () => {
         onNodeSelect={handleChatNodeSelect}
       />
     </div>
+  );
+};
+
+// Main App component with routing
+const App: React.FC = () => {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <MainApp />
+              </ProtectedRoute>
+            }
+          />
+          {/* Catch-all redirect to home */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 };
 

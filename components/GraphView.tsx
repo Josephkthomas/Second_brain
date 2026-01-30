@@ -1650,7 +1650,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       })
       .on("mouseout", (event, d) => {
           if (interactionMode === 'scan') {
-              node.attr("opacity", (n: any) => getLensStatus(n) === 'hidden' ? 0.05 : (getLensStatus(n) === 'context' ? 0.75 : 1));
+              node.attr("opacity", (n: any) => getLensStatus(n) === 'hidden' ? 0.05 : (getLensStatus(n) === 'context' ? 0.2 : 1));
               linkVisible.attr("stroke-opacity", (l: any) => getLensStatus(l.source) === 'hidden' || getLensStatus(l.target) === 'hidden' ? 0.02 : 0.3)
                 .attr("stroke", (l) => getEdgeColor(l.type)).attr("stroke-width", (l) => l.type === 'implicit_tag_match' ? 1 : 1.5);
           }
@@ -1672,8 +1672,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
          }
          
          // In Source Filter Mode or Tag Filter, context nodes are dimmed but visible
-         if ((focusSource || activeTagFilter) && status === 'context') return 0.75; 
-         if (status === 'context') return 0.5; 
+         if ((focusSource || activeTagFilter) && status === 'context') return 0.15;
+         if (status === 'context') return 0.2; 
          return 1;
       }) 
       // Ensure all nodes are interactive, even if dimmed context nodes in filter mode
@@ -2726,6 +2726,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
              </div>
            )}
       </div>
+      )}
     </div>
   );
 };

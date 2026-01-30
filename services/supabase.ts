@@ -22,11 +22,24 @@ export const getAdminKey = () => adminKey || SUPABASE_SERVICE_ROLE_KEY || null;
 
 export const getSupabase = () => {
   if (!supabase) {
-    // Priority: LocalStorage (manual override) > Constant Service Key > Anon Key
-    const key = adminKey || SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+    // Use ANON key for client-side operations - this respects RLS policies
+    // Service role key bypasses RLS and should only be used for admin operations
+    const key = adminKey || SUPABASE_ANON_KEY;
     supabase = createClient(SUPABASE_URL, key);
   }
   return supabase;
+};
+
+// Reset the Supabase client (call this on sign out to ensure clean state)
+export const resetSupabaseClient = () => {
+  supabase = null;
+};
+
+// Helper to get current authenticated user ID
+export const getCurrentUserId = async (): Promise<string | null> => {
+  const client = getSupabase();
+  const { data: { user } } = await client.auth.getUser();
+  return user?.id ?? null;
 };
 
 export const fetchTableData = async (
@@ -56,7 +69,15 @@ export const fetchTableData = async (
 
 export const insertRows = async (tableName: string, rows: TableRow[]): Promise<{ error: any }> => {
   const client = getSupabase();
-  const { error } = await client.from(tableName).insert(rows);
+
+  // Add user_id to each row for authenticated inserts
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { error: new Error('Not authenticated') };
+  }
+
+  const rowsWithUserId = rows.map(row => ({ ...row, user_id: userId }));
+  const { error } = await client.from(tableName).insert(rowsWithUserId);
   return { error };
 };
 
@@ -131,18 +152,25 @@ export const fetchAnchors = async (): Promise<{ label: string; entity_type: stri
 // NEW: Create Anchor
 export const createAnchor = async (label: string, type: string, description: string): Promise<{ data: any, error: any }> => {
   const client = getSupabase();
-  
+
+  // Add user_id for authenticated insert
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { data: null, error: new Error('Not authenticated') };
+  }
+
   const enhancedDescription = `[Type: ${type}] ${description}`;
 
   const { data, error } = await client.from('knowledge_nodes').insert({
     label,
-    entity_type: 'Anchor', 
+    entity_type: 'Anchor',
     description: enhancedDescription,
     confidence: 1.0,
     source: 'User Manual Entry',
     source_type: 'Manual',
+    user_id: userId,
   }).select().single();
-  
+
   return { data, error };
 };
 
@@ -263,14 +291,22 @@ export const discoverTables = async (): Promise<string[]> => {
 
 export const saveKnowledgeSource = async (title: string, content: string, type: string, url?: string, metadata: object = {}) => {
   const client = getSupabase();
+
+  // Add user_id for authenticated insert
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { id: null, error: new Error('Not authenticated') };
+  }
+
   const { data, error } = await client.from('knowledge_sources').insert({
     title,
     content,
     source_type: type,
     source_url: url,
-    metadata: metadata
+    metadata: metadata,
+    user_id: userId,
   }).select('id').single();
-  
+
   return { id: data?.id, error };
 };
 
