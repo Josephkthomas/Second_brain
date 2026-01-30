@@ -4,9 +4,7 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "functions": {
-    "api/*.ts": {
-      "runtime": "@vercel/node@3.0.0"
-    }
+    "api/*.ts": {}
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
