@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Synapse Knowledge Capture",
+  "version": "1.0.0",
+  "description": "One-click knowledge capture from YouTube and articles into your Synapse knowledge graph",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://*.supabase.co/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Synapse Capture"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["content-youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-article.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {}
+}
