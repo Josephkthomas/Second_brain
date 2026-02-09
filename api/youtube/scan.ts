@@ -344,6 +344,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Insert into queue using the video data passed from frontend
+      // Note: duration_seconds is not in the actual table schema
       const queueItems = newVideos.map((video: any) => ({
         user_id: user.id,
         channel_id: channel.id,
@@ -352,7 +353,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         video_url: video.url,
         thumbnail_url: video.thumbnail_url,
         published_at: video.published_at,
-        duration_seconds: video.duration_seconds,
         status: 'pending',
         priority: process_immediately ? 1 : 5, // High priority if processing immediately
         retry_count: 0,
