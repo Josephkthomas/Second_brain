@@ -257,6 +257,7 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
             channels={channels}
             onRefresh={fetchData}
             onAddChannel={() => setShowAddModal(true)}
+            onGraphUpdate={onGraphUpdate}
           />
         )}
 

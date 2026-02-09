@@ -354,13 +354,53 @@ Update SUPABASE_URL, SUPABASE_ANON_KEY, SYNAPSE_APP_URL directly in file.
 npm install
 cp .env.example .env.local   # Add credentials
 npm run dev                  # http://localhost:5173
+```
 
-# Extension
+**IMPORTANT**: `npm run dev` only runs the Vite frontend server. API endpoints in `/api/*` are **Vercel serverless functions** and will NOT work with just `npm run dev`.
+
+### Full Local Development (with API)
+
+To run both frontend AND API endpoints locally, use Vercel CLI:
+
+```bash
+npx vercel login            # One-time authentication
+npx vercel dev              # Runs full stack locally
+```
+
+### Extension Development
+
+```bash
 cd extension
 npm install
 npm run build
 # Load extension/dist/ in Chrome
 ```
+
+---
+
+## Testing Changes
+
+### Production Testing URL (RECOMMENDED)
+
+**Always test changes on the deployed Vercel site:**
+
+**https://second-brain-one-mocha.vercel.app/**
+
+This is the live deployment connected to the production database. Use this URL to:
+- Verify new features work correctly
+- Test API endpoints
+- Confirm database operations
+
+### Deployment Workflow
+
+1. Make code changes locally
+2. Commit and push to trigger Vercel deployment
+3. Test on https://second-brain-one-mocha.vercel.app/
+4. Verify in browser console for any errors
+
+### Vercel Dashboard
+
+Project dashboard: https://vercel.com/joseph-thomas-projects-3897392c/second-brain
 
 ---
 

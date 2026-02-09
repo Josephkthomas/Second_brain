@@ -6,18 +6,21 @@ import { fetchAnchors } from '../../services/supabase';
 import type { YouTubeChannel } from '../../types/youtube';
 import ChannelCard from './ChannelCard';
 import ChannelDetailModal from './ChannelDetailModal';
+import ChannelScanModal from './ChannelScanModal';
 
 interface ChannelListProps {
   channels: YouTubeChannel[];
   onRefresh: () => void;
   onAddChannel: () => void;
+  onGraphUpdate?: () => void;
 }
 
-export default function ChannelList({ channels, onRefresh, onAddChannel }: ChannelListProps) {
+export default function ChannelList({ channels, onRefresh, onAddChannel, onGraphUpdate }: ChannelListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'paused'>('all');
   const [anchors, setAnchors] = useState<Array<{ id: string; label: string }>>([]);
   const [selectedChannel, setSelectedChannel] = useState<YouTubeChannel | null>(null);
+  const [scanningChannel, setScanningChannel] = useState<YouTubeChannel | null>(null);
 
   // Fetch anchors for display
   useEffect(() => {
@@ -138,6 +141,7 @@ export default function ChannelList({ channels, onRefresh, onAddChannel }: Chann
                 anchors={anchors}
                 onUpdate={onRefresh}
                 onClick={() => setSelectedChannel(channel)}
+                onScan={() => setScanningChannel(channel)}
               />
             ))}
           </div>
@@ -157,6 +161,16 @@ export default function ChannelList({ channels, onRefresh, onAddChannel }: Chann
             setSelectedChannel(null);
             onRefresh();
           }}
+        />
+      )}
+
+      {/* Channel Scan Modal */}
+      {scanningChannel && (
+        <ChannelScanModal
+          channel={scanningChannel}
+          onClose={() => setScanningChannel(null)}
+          onRefresh={onRefresh}
+          onGraphUpdate={onGraphUpdate}
         />
       )}
     </div>

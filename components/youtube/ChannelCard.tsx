@@ -1,7 +1,7 @@
 // ChannelCard - Display a single YouTube channel with actions
 
 import React, { useState } from 'react';
-import { Trash2, Power, Edit, Clock, Tag, ExternalLink, Loader2 } from 'lucide-react';
+import { Trash2, Power, Edit, Clock, Tag, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import type { YouTubeChannel } from '../../types/youtube';
@@ -11,9 +11,10 @@ interface ChannelCardProps {
   anchors?: Array<{ id: string; label: string }>;
   onUpdate: () => void;
   onClick?: () => void;
+  onScan?: () => void;
 }
 
-export default function ChannelCard({ channel, anchors = [], onUpdate, onClick }: ChannelCardProps) {
+export default function ChannelCard({ channel, anchors = [], onUpdate, onClick, onScan }: ChannelCardProps) {
   const { session } = useAuth();
   const [isUpdating, setIsUpdating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -206,7 +207,20 @@ export default function ChannelCard({ channel, anchors = [], onUpdate, onClick }
       {/* Actions */}
       <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
         <button
-          onClick={handleDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onScan?.();
+          }}
+          className="flex items-center gap-1 px-3 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 rounded text-xs font-medium transition-colors"
+        >
+          <RefreshCw className="w-3 h-3" />
+          Re-scan
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDelete();
+          }}
           disabled={isDeleting}
           className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition-colors"
         >
