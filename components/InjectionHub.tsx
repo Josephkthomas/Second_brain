@@ -16,6 +16,7 @@ import { getAllExtractionModes } from '../config/extractionModes';
 import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '../types/extraction';
 import type { AnchorNode } from '../types';
 import clsx from 'clsx';
+import YouTubeManager from './youtube/YouTubeManager';
 
 interface InjectionHubProps {
   onComplete: () => void;
@@ -27,7 +28,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input';
+type HubMode = 'research' | 'input' | 'youtube';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -784,14 +785,15 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           </p>
         </div>
 
-        {/* PROGRESS BAR */}
+        {/* PROGRESS BAR - Hidden for YouTube mode */}
+        {hubMode !== 'youtube' && (
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
-          
+
           {(() => {
             const allSteps = ['input', 'sources', 'processing', 'review', 'done'];
             const stepLabels = ['input', 'source select', 'processing', 'review', 'done'];
-            
+
             const visibleSteps = allSteps.filter(s => {
                if (hubMode === 'input' && s === 'sources') return false;
                return true;
@@ -819,6 +821,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
             });
           })()}
         </div>
+        )}
 
         {step === 'input' && (
            <div className="animate-in fade-in slide-in-from-bottom-4">
@@ -829,6 +832,9 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('input')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'input' ? "bg-indigo-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <UploadCloud size={16} /> Standard Input
+                    </button>
+                    <button onClick={() => setHubMode('youtube')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'youtube' ? "bg-red-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
+                        <Youtube size={16} /> YouTube Channels
                     </button>
                 </div>
              </div>
@@ -1153,6 +1159,12 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                             </div>
                         </div>
                     </div>
+                </div>
+             )}
+
+             {hubMode === 'youtube' && (
+                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
+                    <YouTubeManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
                 </div>
              )}
            </div>

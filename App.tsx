@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 
-// Lazy load the landing page for better initial performance
-const LandingPage = lazy(() => import('./pages/LandingPage'));
 import { Sidebar } from './components/Sidebar';
 import { DataGrid } from './components/DataGrid';
 import { AIAnalyst } from './components/AIAnalyst';
@@ -517,31 +515,14 @@ const MainApp: React.FC = () => {
   );
 };
 
-// Loading fallback for lazy-loaded components
-const PageLoader: React.FC = () => (
-  <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-    <div className="text-center">
-      <div className="w-12 h-12 border-4 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin mx-auto mb-4" />
-      <p className="text-slate-400 text-sm">Loading...</p>
-    </div>
-  </div>
-);
-
 // Main App component with routing
 const App: React.FC = () => {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* Public landing page */}
-          <Route
-            path="/"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <LandingPage />
-              </Suspense>
-            }
-          />
+          {/* Redirect root to login */}
+          <Route path="/" element={<Navigate to="/login" replace />} />
 
           {/* Auth routes */}
           <Route path="/login" element={<Login />} />
@@ -557,14 +538,14 @@ const App: React.FC = () => {
             }
           />
 
-          {/* Legacy redirect - old "/" protected route now at "/app" */}
+          {/* Legacy redirect */}
           <Route
             path="/dashboard"
             element={<Navigate to="/app" replace />}
           />
 
-          {/* Catch-all redirect to landing */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Catch-all redirect to login */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

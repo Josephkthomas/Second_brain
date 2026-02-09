@@ -1,6 +1,17 @@
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY } from '../constants';
 import { TableRow } from '../types';
+import type {
+  YouTubeChannel,
+  YouTubeQueueItem,
+  YouTubeSettings,
+  YouTubeQueueStatus,
+  AddChannelFormData,
+  UpdateChannelFormData,
+  UpdateSettingsFormData,
+  QueueFilters,
+  YouTubeStats,
+} from '../types/youtube';
 
 let supabase: SupabaseClient | null = null;
 // Local storage override still supported, but usually unnecessary if SERVICE_ROLE_KEY is in constants
@@ -515,3 +526,505 @@ export const updateUserProfile = async (updates: Partial<UserProfile>): Promise<
 
   return { error };
 };
+
+// ============================================
+// YOUTUBE CHANNEL AUTO-INGESTION
+// ============================================
+
+// --- YOUTUBE CHANNELS ---
+
+export const fetchYouTubeChannels = async (): Promise<YouTubeChannel[]> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
+  const { data, error } = await client
+    .from('youtube_channels')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Failed to fetch YouTube channels:', error);
+    return [];
+  }
+  return data || [];
+};
+
+export const fetchYouTubeChannel = async (channelId: string): Promise<YouTubeChannel | null> => {
+  const client = getSupabase();
+
+  const { data, error } = await client
+    .from('youtube_channels')
+    .select('*')
+    .eq('id', channelId)
+    .single();
+
+  if (error) {
+    console.error('Failed to fetch YouTube channel:', error);
+    return null;
+  }
+  return data;
+};
+
+export const addYouTubeChannel = async (
+  channelData: {
+    channel_id: string;
+    channel_name: string;
+    channel_url: string;
+    thumbnail_url?: string | null;
+    description?: string | null;
+    subscriber_count?: number | null;
+  } & Partial<AddChannelFormData>
+): Promise<{ data: YouTubeChannel | null; error: any }> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { data: null, error: new Error('Not authenticated') };
+  }
+
+  const { data, error } = await client
+    .from('youtube_channels')
+    .insert({
+      user_id: userId,
+      channel_id: channelData.channel_id,
+      channel_name: channelData.channel_name,
+      channel_url: channelData.channel_url,
+      thumbnail_url: channelData.thumbnail_url || null,
+      description: channelData.description || null,
+      subscriber_count: channelData.subscriber_count || null,
+      auto_ingest: channelData.auto_ingest ?? true,
+      extraction_mode: channelData.extraction_mode || 'comprehensive',
+      anchor_emphasis: channelData.anchor_emphasis || 'standard',
+      linked_anchor_ids: channelData.linked_anchor_ids || [],
+      custom_instructions: channelData.custom_instructions || null,
+      is_active: true,
+      total_videos_ingested: 0,
+    })
+    .select()
+    .single();
+
+  return { data, error };
+};
+
+export const updateYouTubeChannel = async (
+  channelId: string,
+  updates: UpdateChannelFormData
+): Promise<{ error: any }> => {
+  const client = getSupabase();
+
+  const { error } = await client
+    .from('youtube_channels')
+    .update(updates)
+    .eq('id', channelId);
+
+  return { error };
+};
+
+export const deleteYouTubeChannel = async (channelId: string): Promise<{ error: any }> => {
+  const client = getSupabase();
+
+  const { error } = await client
+    .from('youtube_channels')
+    .delete()
+    .eq('id', channelId);
+
+  return { error };
+};
+
+export const updateChannelLastChecked = async (channelId: string): Promise<void> => {
+  const client = getSupabase();
+
+  await client
+    .from('youtube_channels')
+    .update({ last_checked_at: new Date().toISOString() })
+    .eq('id', channelId);
+};
+
+export const incrementChannelVideosIngested = async (channelId: string): Promise<void> => {
+  const client = getSupabase();
+
+  // Fetch current count and increment
+  const { data } = await client
+    .from('youtube_channels')
+    .select('total_videos_ingested')
+    .eq('id', channelId)
+    .single();
+
+  if (data) {
+    await client
+      .from('youtube_channels')
+      .update({ total_videos_ingested: (data.total_videos_ingested || 0) + 1 })
+      .eq('id', channelId);
+  }
+};
+
+// --- YOUTUBE QUEUE ---
+
+export const fetchYouTubeQueue = async (filters?: QueueFilters): Promise<YouTubeQueueItem[]> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
+  let query = client
+    .from('youtube_ingestion_queue')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (filters?.status) {
+    if (Array.isArray(filters.status)) {
+      query = query.in('status', filters.status);
+    } else {
+      query = query.eq('status', filters.status);
+    }
+  }
+
+  if (filters?.channel_id) {
+    query = query.eq('channel_id', filters.channel_id);
+  }
+
+  if (filters?.since) {
+    query = query.gte('created_at', filters.since);
+  }
+
+  if (filters?.limit) {
+    query = query.limit(filters.limit);
+  } else {
+    query = query.limit(100);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Failed to fetch YouTube queue:', error);
+    return [];
+  }
+  return data || [];
+};
+
+export const fetchPendingQueueItems = async (limit: number = 5): Promise<YouTubeQueueItem[]> => {
+  const client = getSupabase();
+
+  const { data, error } = await client
+    .from('youtube_ingestion_queue')
+    .select('*')
+    .eq('status', 'pending')
+    .order('priority', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    console.error('Failed to fetch pending queue items:', error);
+    return [];
+  }
+  return data || [];
+};
+
+export const addToYouTubeQueue = async (
+  items: Array<{
+    channel_id: string;
+    video_id: string;
+    video_title?: string | null;
+    video_url: string;
+    thumbnail_url?: string | null;
+    published_at?: string | null;
+    priority?: number;
+  }>
+): Promise<{ error: any; insertedCount: number }> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { error: new Error('Not authenticated'), insertedCount: 0 };
+  }
+
+  const rowsWithUserId = items.map(item => ({
+    user_id: userId,
+    channel_id: item.channel_id,
+    video_id: item.video_id,
+    video_title: item.video_title || null,
+    video_url: item.video_url,
+    thumbnail_url: item.thumbnail_url || null,
+    published_at: item.published_at || null,
+    priority: item.priority || 5,
+    status: 'pending' as const,
+    retry_count: 0,
+    max_retries: 3,
+  }));
+
+  // Use upsert with ON CONFLICT DO NOTHING to handle duplicates
+  const { data, error } = await client
+    .from('youtube_ingestion_queue')
+    .upsert(rowsWithUserId, {
+      onConflict: 'user_id,video_id',
+      ignoreDuplicates: true,
+    })
+    .select();
+
+  return { error, insertedCount: data?.length || 0 };
+};
+
+export const updateQueueItemStatus = async (
+  itemId: string,
+  status: YouTubeQueueStatus,
+  additionalUpdates?: Partial<YouTubeQueueItem>
+): Promise<{ error: any }> => {
+  const client = getSupabase();
+
+  const updates: Record<string, any> = { status, ...additionalUpdates };
+
+  // Set timestamps based on status
+  if (status === 'fetching_transcript' || status === 'extracting') {
+    updates.started_at = updates.started_at || new Date().toISOString();
+  } else if (status === 'completed' || status === 'failed' || status === 'skipped') {
+    updates.completed_at = new Date().toISOString();
+  }
+
+  const { error } = await client
+    .from('youtube_ingestion_queue')
+    .update(updates)
+    .eq('id', itemId);
+
+  return { error };
+};
+
+export const retryQueueItem = async (itemId: string): Promise<{ error: any }> => {
+  const client = getSupabase();
+
+  // Fetch current retry count
+  const { data: item } = await client
+    .from('youtube_ingestion_queue')
+    .select('retry_count, max_retries')
+    .eq('id', itemId)
+    .single();
+
+  if (!item) {
+    return { error: new Error('Queue item not found') };
+  }
+
+  const { error } = await client
+    .from('youtube_ingestion_queue')
+    .update({
+      status: 'pending',
+      retry_count: (item.retry_count || 0) + 1,
+      error_message: null,
+      started_at: null,
+      completed_at: null,
+    })
+    .eq('id', itemId);
+
+  return { error };
+};
+
+export const deleteQueueItem = async (itemId: string): Promise<{ error: any }> => {
+  const client = getSupabase();
+
+  const { error } = await client
+    .from('youtube_ingestion_queue')
+    .delete()
+    .eq('id', itemId);
+
+  return { error };
+};
+
+export const checkVideoInQueue = async (videoId: string): Promise<boolean> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return false;
+
+  const { data } = await client
+    .from('youtube_ingestion_queue')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('video_id', videoId)
+    .single();
+
+  return !!data;
+};
+
+// --- YOUTUBE SETTINGS ---
+
+export const fetchYouTubeSettings = async (): Promise<YouTubeSettings | null> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return null;
+
+  const { data, error } = await client
+    .from('youtube_settings')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    // Settings don't exist yet, create default
+    if (error.code === 'PGRST116') {
+      const { data: newSettings, error: insertError } = await client
+        .from('youtube_settings')
+        .insert({
+          user_id: userId,
+          apify_api_key: null,
+          default_auto_ingest: true,
+          default_extraction_mode: 'comprehensive',
+          default_anchor_emphasis: 'standard',
+          max_concurrent_extractions: 3,
+          max_videos_per_channel: 50,
+          daily_video_limit: 20,
+          videos_ingested_today: 0,
+          daily_limit_reset_at: null,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Failed to create YouTube settings:', insertError);
+        return null;
+      }
+      return newSettings;
+    }
+    console.error('Failed to fetch YouTube settings:', error);
+    return null;
+  }
+
+  return data;
+};
+
+export const updateYouTubeSettings = async (
+  updates: UpdateSettingsFormData
+): Promise<{ error: any }> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { error: new Error('Not authenticated') };
+  }
+
+  const { error } = await client
+    .from('youtube_settings')
+    .update(updates)
+    .eq('user_id', userId);
+
+  return { error };
+};
+
+export const incrementVideosIngestedToday = async (): Promise<void> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return;
+
+  // Fetch current count
+  const { data: settings } = await client
+    .from('youtube_settings')
+    .select('videos_ingested_today, daily_limit_reset_at')
+    .eq('user_id', userId)
+    .single();
+
+  if (!settings) return;
+
+  // Check if we need to reset the daily counter
+  const today = new Date().toISOString().split('T')[0];
+  const lastReset = settings.daily_limit_reset_at?.split('T')[0];
+
+  if (lastReset !== today) {
+    // Reset counter for new day
+    await client
+      .from('youtube_settings')
+      .update({
+        videos_ingested_today: 1,
+        daily_limit_reset_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId);
+  } else {
+    // Increment counter
+    await client
+      .from('youtube_settings')
+      .update({
+        videos_ingested_today: (settings.videos_ingested_today || 0) + 1,
+      })
+      .eq('user_id', userId);
+  }
+};
+
+export const checkDailyLimitReached = async (): Promise<boolean> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+  if (!userId) return true; // Block if not authenticated
+
+  const { data: settings } = await client
+    .from('youtube_settings')
+    .select('videos_ingested_today, daily_video_limit, daily_limit_reset_at')
+    .eq('user_id', userId)
+    .single();
+
+  if (!settings) return true;
+
+  // Check if we need to reset the daily counter
+  const today = new Date().toISOString().split('T')[0];
+  const lastReset = settings.daily_limit_reset_at?.split('T')[0];
+
+  if (lastReset !== today) {
+    // New day, reset hasn't happened yet
+    return false;
+  }
+
+  return (settings.videos_ingested_today || 0) >= (settings.daily_video_limit || 20);
+};
+
+// --- YOUTUBE STATS ---
+
+export const fetchYouTubeStats = async (): Promise<YouTubeStats> => {
+  const client = getSupabase();
+  const userId = await getCurrentUserId();
+
+  const defaultStats: YouTubeStats = {
+    total_channels: 0,
+    active_channels: 0,
+    pending_videos: 0,
+    processing_videos: 0,
+    completed_today: 0,
+    failed_today: 0,
+    daily_limit: 20,
+    videos_today: 0,
+  };
+
+  if (!userId) return defaultStats;
+
+  // Fetch channel counts
+  const { data: channels } = await client
+    .from('youtube_channels')
+    .select('id, is_active')
+    .eq('user_id', userId);
+
+  // Fetch queue stats
+  const today = new Date().toISOString().split('T')[0];
+
+  const { data: queueItems } = await client
+    .from('youtube_ingestion_queue')
+    .select('status, completed_at')
+    .eq('user_id', userId);
+
+  // Fetch settings for daily limit
+  const settings = await fetchYouTubeSettings();
+
+  const stats: YouTubeStats = {
+    total_channels: channels?.length || 0,
+    active_channels: channels?.filter(c => c.is_active).length || 0,
+    pending_videos: queueItems?.filter(q => q.status === 'pending').length || 0,
+    processing_videos: queueItems?.filter(q =>
+      q.status === 'fetching_transcript' || q.status === 'extracting'
+    ).length || 0,
+    completed_today: queueItems?.filter(q =>
+      q.status === 'completed' && q.completed_at?.startsWith(today)
+    ).length || 0,
+    failed_today: queueItems?.filter(q =>
+      q.status === 'failed' && q.completed_at?.startsWith(today)
+    ).length || 0,
+    daily_limit: settings?.daily_video_limit || 20,
+    videos_today: settings?.videos_ingested_today || 0,
+  };
+
+  return stats;
+};
+
+// --- YOUTUBE ANCHOR HELPERS ---
+
+// Fetch user's anchors for dropdown selection (re-export for convenience)
+export const fetchUserAnchors = fetchAnchors;

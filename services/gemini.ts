@@ -954,3 +954,181 @@ export const getEmbeddingStatus = async (): Promise<{ missing: number; message: 
 
   return { missing, message: `${missing} nodes need embeddings` };
 };
+
+// ============================================
+// YOUTUBE TRANSCRIPT EXTRACTION
+// ============================================
+
+/**
+ * Metadata about the YouTube video being processed
+ */
+export interface YouTubeVideoMetadata {
+  title: string;
+  channelName: string;
+  videoUrl: string;
+  thumbnailUrl?: string;
+  publishedAt?: string;
+  description?: string;
+}
+
+/**
+ * Special system instruction for YouTube transcript extraction
+ * Optimized for spoken content, which often has:
+ * - Transcription errors
+ * - Less formal structure
+ * - Verbal filler words
+ * - Topic jumping
+ */
+const YOUTUBE_TRANSCRIPT_SYSTEM_INSTRUCTION = `
+# Role: YouTube Video Analyst for Knowledge Graph Extraction
+
+You are analyzing a YouTube video transcript to extract knowledge for a personal knowledge graph.
+
+## Key Considerations for Video Transcripts:
+
+1. **Spoken Content Artifacts**
+   - Transcripts may have minor errors (homophone mistakes, missing punctuation)
+   - Interpret based on context, not literal transcription
+   - Speakers may use informal language, slang, or verbal fillers
+
+2. **Content Structure**
+   - Videos often jump between topics - track the main threads
+   - Look for key segments: introductions, main points, conclusions
+   - Note any timestamps or sections mentioned by the speaker
+
+3. **Extraction Focus**
+   - Key concepts and topics discussed
+   - People mentioned (speakers, interviewees, referenced individuals)
+   - Products, tools, books, or resources recommended
+   - Actionable insights and advice
+   - Opinions vs facts (mark opinions with lower confidence)
+   - Quotes worth preserving (significant statements)
+
+4. **Relationship Mapping**
+   - Connect topics to the channel's main theme
+   - Link recommendations to the problems they solve
+   - Map advice to the goals it supports
+
+5. **Confidence Scoring**
+   - High (0.8-1.0): Clear, well-explained concepts
+   - Medium (0.5-0.7): Opinions, predictions, or briefly mentioned items
+   - Low (0.3-0.5): Tangential mentions or unclear references
+`;
+
+/**
+ * Extract knowledge from a YouTube video transcript
+ * Uses transcript-specific prompts optimized for spoken content
+ *
+ * @param transcript - The video transcript text
+ * @param videoMetadata - Metadata about the video (title, channel, etc.)
+ * @param extractionConfig - Optional extraction configuration (mode, anchor emphasis, etc.)
+ * @returns ExtractedGraph with nodes and edges
+ */
+export const extractKnowledgeFromYouTubeTranscript = async (
+  transcript: string,
+  videoMetadata: YouTubeVideoMetadata,
+  extractionConfig?: ExtractionSessionConfig
+): Promise<ExtractedGraph> => {
+  const ai = initGenAI();
+
+  // Fetch profile and anchors for context
+  const userProfile = await fetchUserProfile();
+  let anchors: AnchorNode[] = [];
+  try {
+    anchors = await getAnchors();
+  } catch (err) {
+    console.warn('Failed to load anchors:', err);
+  }
+
+  // Build context header
+  const contextHeader = `
+## Video Information
+- **Title**: ${videoMetadata.title}
+- **Channel**: ${videoMetadata.channelName}
+- **URL**: ${videoMetadata.videoUrl}
+${videoMetadata.publishedAt ? `- **Published**: ${videoMetadata.publishedAt}` : ''}
+${videoMetadata.description ? `- **Description**: ${videoMetadata.description.slice(0, 500)}` : ''}
+`;
+
+  let systemPrompt: string;
+
+  if (extractionConfig) {
+    // Use PRD 3 prompt builder with YouTube-specific additions
+    const config: PromptBuilderConfig = {
+      mode: extractionConfig.mode,
+      anchorEmphasis: extractionConfig.anchorEmphasis,
+      profile: userProfile,
+      anchors: anchors,
+      selectedAnchorIds: extractionConfig.selectedAnchorIds,
+      userGuidance: extractionConfig.userGuidance,
+      contextHeader: contextHeader
+    };
+    // Prepend YouTube-specific instructions
+    systemPrompt = YOUTUBE_TRANSCRIPT_SYSTEM_INSTRUCTION + '\n\n' + buildExtractionPrompt(config);
+  } else {
+    // Fallback: combine YouTube instructions with standard extraction
+    const profileContext = buildProfileContext(userProfile);
+    const anchorContext = hasAnchors(anchors) ? buildAnchorContext(anchors) : '';
+    systemPrompt = YOUTUBE_TRANSCRIPT_SYSTEM_INSTRUCTION + '\n' + contextHeader + '\n' + EXTRACTION_SYSTEM_INSTRUCTION + profileContext + anchorContext;
+  }
+
+  // Clean and prepare transcript
+  const cleanedTranscript = cleanTranscriptForExtraction(transcript);
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `YouTube Video Transcript:\n"""\n${cleanedTranscript.slice(0, 30000)}\n"""`,
+      config: {
+        temperature: 0.1,
+        systemInstruction: systemPrompt,
+        responseMimeType: 'application/json',
+        responseSchema: EXTRACTION_SCHEMA
+      }
+    });
+
+    const result = cleanAndParseJSON(response.text || '{}');
+
+    // Ensure metadata includes video info
+    const metadata = {
+      sourceTitle: videoMetadata.title,
+      sourceType: 'YouTube',
+      sourceUrl: videoMetadata.videoUrl,
+      thumbnailUrl: videoMetadata.thumbnailUrl,
+      ...result.metadata
+    };
+
+    return {
+      metadata,
+      nodes: Array.isArray(result.nodes) ? result.nodes : [],
+      edges: Array.isArray(result.edges) ? result.edges : [],
+      searchQueries: Array.isArray(result.searchQueries) ? result.searchQueries : []
+    };
+  } catch (error) {
+    console.error('YouTube transcript extraction failed:', error);
+    throw error;
+  }
+};
+
+/**
+ * Clean transcript text for better extraction
+ * - Remove timing artifacts
+ * - Normalize whitespace
+ * - Optionally remove speaker labels
+ */
+function cleanTranscriptForExtraction(transcript: string): string {
+  let cleaned = transcript;
+
+  // Remove common timestamp patterns like [00:00:00] or (00:00)
+  cleaned = cleaned.replace(/\[[\d:]+\]/g, '');
+  cleaned = cleaned.replace(/\([\d:]+\)/g, '');
+
+  // Remove auto-generated caption artifacts like [Music] [Applause]
+  cleaned = cleaned.replace(/\[(Music|Applause|Laughter|Silence)\]/gi, '');
+
+  // Normalize excessive whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ');
+  cleaned = cleaned.replace(/\n\s*\n\s*\n/g, '\n\n');
+
+  return cleaned.trim();
+}
