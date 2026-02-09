@@ -146,6 +146,18 @@ export default function ChannelScanModal({
       setIsSubmitting(true);
       setError(null);
 
+      // Get full video data for selected videos (pass to API instead of just IDs)
+      const selectedVideos = videos
+        .filter(v => selectedIds.has(v.video_id))
+        .map(v => ({
+          video_id: v.video_id,
+          title: v.title,
+          url: v.url,
+          thumbnail_url: v.thumbnail_url,
+          published_at: v.published_at,
+          duration_seconds: v.duration_seconds,
+        }));
+
       const response = await fetch('/api/youtube/scan', {
         method: 'POST',
         headers: {
@@ -154,7 +166,7 @@ export default function ChannelScanModal({
         },
         body: JSON.stringify({
           channel_id: channel.id,
-          video_ids: Array.from(selectedIds),
+          videos: selectedVideos,
           process_immediately: processImmediately,
         }),
       });

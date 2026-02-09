@@ -297,15 +297,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // POST - Add selected videos to queue (optionally with immediate processing)
+    // Accepts full video data from frontend to avoid re-fetching RSS
     if (req.method === 'POST') {
-      const { channel_id, video_ids, process_immediately } = req.body;
+      const { channel_id, videos: videosToAdd, process_immediately } = req.body;
 
       if (!channel_id || typeof channel_id !== 'string') {
         return res.status(400).json({ error: 'channel_id is required' });
       }
 
-      if (!video_ids || !Array.isArray(video_ids) || video_ids.length === 0) {
-        return res.status(400).json({ error: 'video_ids array is required' });
+      if (!videosToAdd || !Array.isArray(videosToAdd) || videosToAdd.length === 0) {
+        return res.status(400).json({ error: 'videos array is required' });
       }
 
       // Verify channel belongs to user
@@ -320,66 +321,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ error: 'Channel not found' });
       }
 
-      console.log(`[Scan] Adding ${video_ids.length} videos to queue for ${channel.channel_name}`);
+      console.log(`[Scan] Adding ${videosToAdd.length} videos to queue for ${channel.channel_name}`);
 
       // Check which videos are already queued
+      const videoIds = videosToAdd.map((v: any) => v.video_id);
       const { data: existingItems } = await supabase
         .from('youtube_ingestion_queue')
         .select('video_id')
         .eq('user_id', user.id)
-        .in('video_id', video_ids);
+        .in('video_id', videoIds);
 
       const existingVideoIds = new Set((existingItems || []).map(item => item.video_id));
-      const newVideoIds = video_ids.filter((id: string) => !existingVideoIds.has(id));
+      const newVideos = videosToAdd.filter((v: any) => !existingVideoIds.has(v.video_id));
 
-      if (newVideoIds.length === 0) {
+      if (newVideos.length === 0) {
         return res.status(200).json({
           success: true,
           added: 0,
-          skipped: video_ids.length,
+          skipped: videosToAdd.length,
           message: 'All selected videos are already in the queue',
         });
       }
 
-      // Fetch video info for new videos (need title, thumbnail, etc.)
-      const videos = await fetchChannelVideosFromRSS(channel.channel_id);
-      const videoMap = new Map(videos.map(v => [v.video_id, v]));
-
-      // Fetch durations
-      const newVideosWithInfo = await Promise.all(
-        newVideoIds.map(async (videoId: string) => {
-          const video = videoMap.get(videoId);
-          if (!video) return null;
-          const duration = await getVideoDuration(videoId);
-          return { ...video, duration_seconds: duration };
-        })
-      );
-
-      const validVideos = newVideosWithInfo.filter(v => v !== null);
-
-      // Insert into queue
-      const queueItems = validVideos.map(video => ({
+      // Insert into queue using the video data passed from frontend
+      const queueItems = newVideos.map((video: any) => ({
         user_id: user.id,
         channel_id: channel.id,
-        video_id: video!.video_id,
-        video_title: video!.title,
-        video_url: video!.url,
-        thumbnail_url: video!.thumbnail_url,
-        published_at: video!.published_at,
-        duration_seconds: video!.duration_seconds,
+        video_id: video.video_id,
+        video_title: video.title,
+        video_url: video.url,
+        thumbnail_url: video.thumbnail_url,
+        published_at: video.published_at,
+        duration_seconds: video.duration_seconds,
         status: 'pending',
         priority: process_immediately ? 1 : 5, // High priority if processing immediately
         retry_count: 0,
         max_retries: 3,
       }));
 
-      const { error: insertError } = await supabase
+      const { data: insertedData, error: insertError } = await supabase
         .from('youtube_ingestion_queue')
-        .insert(queueItems);
+        .insert(queueItems)
+        .select();
 
       if (insertError) {
         console.error('[Scan] Error adding to queue:', insertError);
-        return res.status(500).json({ error: 'Failed to add videos to queue' });
+        return res.status(500).json({
+          error: 'Failed to add videos to queue',
+          details: insertError.message
+        });
       }
 
       console.log(`[Scan] Added ${queueItems.length} videos to queue`);
@@ -415,7 +405,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({
         success: true,
         added: queueItems.length,
-        skipped: video_ids.length - newVideoIds.length,
+        skipped: videosToAdd.length - newVideos.length,
         process_immediately,
         process_result: processResult,
         message: process_immediately
