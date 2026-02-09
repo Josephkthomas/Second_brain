@@ -173,7 +173,11 @@ export default function ChannelScanModal({
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Failed to add videos to queue');
+        // Show full error details for debugging
+        const errorMsg = data.details
+          ? `${data.error}: ${data.details}`
+          : data.error || 'Failed to add videos to queue';
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();
