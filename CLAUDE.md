@@ -378,29 +378,100 @@ npm run build
 
 ---
 
-## Testing Changes
+## Development & Deployment Workflow
 
-### Production Testing URL (RECOMMENDED)
+### IMPORTANT: Feature Branch Workflow (MANDATORY)
 
-**Always test changes on the deployed Vercel site:**
+**NEVER push directly to `main` branch.** All changes must go through feature branches and preview testing first.
 
-**https://second-brain-one-mocha.vercel.app/**
+### URLs
 
-This is the live deployment connected to the production database. Use this URL to:
-- Verify new features work correctly
-- Test API endpoints
-- Confirm database operations
+| Environment | URL | Purpose |
+|-------------|-----|---------|
+| **Production** | https://second-brain-one-mocha.vercel.app/ | Live site for all users |
+| **Preview** | Auto-generated per branch | Testing before merging to production |
+| **Vercel Dashboard** | https://vercel.com/joseph-thomas-projects-3897392c/second-brain | Manage deployments |
 
-### Deployment Workflow
+### Step-by-Step Workflow for New Features
 
-1. Make code changes locally
-2. Commit and push to trigger Vercel deployment
-3. Test on https://second-brain-one-mocha.vercel.app/
-4. Verify in browser console for any errors
+#### Step 1: Create Feature Branch
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/your-feature-name
+```
 
-### Vercel Dashboard
+Use descriptive branch names like:
+- `feature/youtube-rescan`
+- `fix/login-bug`
+- `update/graph-styling`
 
-Project dashboard: https://vercel.com/joseph-thomas-projects-3897392c/second-brain
+#### Step 2: Make Changes
+- Write code
+- Test locally if possible (with `vercel dev` for API endpoints)
+
+#### Step 3: Commit and Push to Feature Branch
+```bash
+git add <specific-files>
+git commit -m "feat: Description of changes"
+git push origin feature/your-feature-name
+```
+
+#### Step 4: Get Preview URL
+Vercel automatically creates a **preview deployment** for the branch. Find it:
+1. Check the Vercel dashboard, OR
+2. Run: `vercel --prod=false` to get the preview URL
+
+The preview URL format: `https://second-brain-<branch-hash>.vercel.app/`
+
+#### Step 5: Test on Preview URL
+- **Provide the preview URL to the user**
+- User tests the feature
+- User confirms: "This is good, please merge to main"
+
+#### Step 6: Merge to Production (Only After User Approval)
+```bash
+git checkout main
+git pull origin main
+git merge feature/your-feature-name
+git push origin main
+```
+
+Or create a Pull Request on GitHub for more visibility.
+
+#### Step 7: Clean Up
+```bash
+git branch -d feature/your-feature-name
+git push origin --delete feature/your-feature-name
+```
+
+### Quick Reference Commands
+
+```bash
+# Start new feature
+git checkout -b feature/name
+
+# Check current branch
+git branch
+
+# Switch branches
+git checkout main
+git checkout feature/name
+
+# See all branches (including remote)
+git branch -a
+
+# Delete local branch
+git branch -d feature/name
+```
+
+### For AI Agents: CRITICAL RULES
+
+1. **NEVER push to main directly** - Always use feature branches
+2. **ALWAYS provide preview URL** to user before merging
+3. **WAIT for user confirmation** before merging to main
+4. **Use clear commit messages** with prefixes: `feat:`, `fix:`, `update:`, `docs:`
+5. **One feature per branch** - Don't mix unrelated changes
 
 ---
 
