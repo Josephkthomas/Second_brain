@@ -99,6 +99,7 @@ async function resolveChannelUrl(url: string): Promise<{
   try {
     // Extract channel identifier from URL and normalize to full URL
     let pageUrl = url.trim();
+    console.log('[resolveChannelUrl] Input URL:', url);
 
     // Handle shorthand formats:
     // @username -> https://www.youtube.com/@username
@@ -118,30 +119,43 @@ async function resolveChannelUrl(url: string): Promise<{
       pageUrl = 'https://' + pageUrl;
     }
 
+    console.log('[resolveChannelUrl] Fetching URL:', pageUrl);
+
     // Fetch the channel page to extract info
     const response = await fetch(pageUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       },
     });
 
+    console.log('[resolveChannelUrl] Response status:', response.status);
+
     if (!response.ok) {
+      console.error('[resolveChannelUrl] Fetch failed:', response.status, response.statusText);
       return null;
     }
 
     const html = await response.text();
+    console.log('[resolveChannelUrl] HTML length:', html.length);
 
-    // Extract channel ID
+    // Extract channel ID - try multiple patterns
     const channelIdMatch = html.match(/"channelId":"(UC[a-zA-Z0-9_-]+)"/) ||
                            html.match(/channel_id=(UC[a-zA-Z0-9_-]+)/) ||
-                           html.match(/"externalId":"(UC[a-zA-Z0-9_-]+)"/);
+                           html.match(/"externalId":"(UC[a-zA-Z0-9_-]+)"/) ||
+                           html.match(/\\?"channelId\\?":\\?"(UC[a-zA-Z0-9_-]+)\\?"/);
 
     if (!channelIdMatch) {
+      console.error('[resolveChannelUrl] Could not find channel ID in HTML');
+      // Log a snippet to help debug
+      const snippet = html.substring(0, 2000);
+      console.log('[resolveChannelUrl] HTML snippet:', snippet.includes('channelId') ? 'contains channelId' : 'NO channelId found');
       return null;
     }
 
     const channelId = channelIdMatch[1];
+    console.log('[resolveChannelUrl] Found channel ID:', channelId);
 
     // Extract channel name
     const nameMatch = html.match(/<meta property="og:title" content="([^"]+)"/) ||
