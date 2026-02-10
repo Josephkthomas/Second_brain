@@ -150,8 +150,20 @@ async function fetchChannelVideosFromRSS(channelId: string): Promise<YouTubeVide
     console.log(`[Scan] RSS response length: ${xml.length} chars`);
 
     // Check if response looks like valid RSS/XML
-    if (xml.length < 100 || !xml.includes('<feed')) {
-      console.error(`[Scan] Invalid RSS response - doesn't look like XML feed. First 500 chars: ${xml.substring(0, 500)}`);
+    if (xml.length < 100) {
+      console.error(`[Scan] RSS response too short (${xml.length} chars). Content: ${xml}`);
+      return [];
+    }
+
+    if (!xml.includes('<feed')) {
+      // Check if it's an error page or consent page
+      if (xml.includes('consent.youtube.com') || xml.includes('consent.google.com')) {
+        console.error(`[Scan] YouTube returned consent/cookie page - may need different approach`);
+      } else if (xml.includes('<!DOCTYPE html>') || xml.includes('<html')) {
+        console.error(`[Scan] YouTube returned HTML page instead of RSS. First 1000 chars: ${xml.substring(0, 1000)}`);
+      } else {
+        console.error(`[Scan] Invalid RSS response - no <feed tag. First 500 chars: ${xml.substring(0, 500)}`);
+      }
       return [];
     }
 
@@ -261,16 +273,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const minDuration = channel.min_video_duration ?? DEFAULT_MIN_DURATION;
       const maxDuration = channel.max_video_duration ?? DEFAULT_MAX_DURATION;
 
-      console.log(`[Scan] Scanning channel: ${channel.channel_name} (min: ${minDuration}s, max: ${maxDuration || 'unlimited'})`);
+      console.log(`[Scan] Scanning channel: ${channel.channel_name}`);
+      console.log(`[Scan] YouTube channel_id: ${channel.channel_id}`);
+      console.log(`[Scan] Duration filter: min=${minDuration}s, max=${maxDuration || 'unlimited'}`);
 
       // Fetch recent videos from RSS
       const videos = await fetchChannelVideosFromRSS(channel.channel_id);
 
+      console.log(`[Scan] RSS returned ${videos.length} videos`);
+
       if (videos.length === 0) {
         return res.status(200).json({
           channel_name: channel.channel_name,
+          channel_id: channel.channel_id,
           videos: [],
-          message: 'No videos found in RSS feed',
+          message: 'No videos found in RSS feed. This could be due to YouTube rate limiting or an invalid channel ID.',
         });
       }
 
