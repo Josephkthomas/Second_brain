@@ -20,7 +20,7 @@ export default function ChannelCard({ channel, anchors = [], onUpdate, onClick, 
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Get anchor labels for this channel
-  const linkedAnchors = channel.linked_anchor_ids
+  const linkedAnchors = (channel.linked_anchor_ids || [])
     .map(id => anchors.find(a => a.id === id)?.label)
     .filter(Boolean);
 

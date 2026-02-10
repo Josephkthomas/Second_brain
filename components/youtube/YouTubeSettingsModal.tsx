@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Settings, Loader2, CheckCircle,
-  AlertCircle, Save, CheckCircle2
+  AlertCircle, Save
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -111,9 +111,6 @@ export default function YouTubeSettingsModal({
     }
   };
 
-  const hasApifyKey = (settings as any)?.has_apify_key;
-  const hasYoutubeApiKey = (settings as any)?.has_youtube_api_key;
-  const youtubeKeyIsGlobal = (settings as any)?.youtube_api_key_preview === 'Configured globally';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in">
@@ -139,60 +136,6 @@ export default function YouTubeSettingsModal({
 
         {/* Content */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Apify API Key Status */}
-          <div className={clsx(
-            'flex items-center gap-3 p-4 rounded-lg border',
-            hasApifyKey
-              ? 'bg-emerald-500/10 border-emerald-500/30'
-              : 'bg-amber-500/10 border-amber-500/30'
-          )}>
-            {hasApifyKey ? (
-              <>
-                <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                <div>
-                  <div className="text-emerald-400 font-medium">Apify API Key Configured</div>
-                  <div className="text-sm text-slate-400">Transcript extraction is ready</div>
-                </div>
-              </>
-            ) : (
-              <>
-                <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <div>
-                  <div className="text-amber-400 font-medium">Apify API Key Not Configured</div>
-                  <div className="text-sm text-slate-400">Add APIFY_API_KEY to Vercel environment variables</div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* YouTube Data API Key */}
-          <div className={clsx(
-            'flex items-center gap-3 p-4 rounded-lg border',
-            hasYoutubeApiKey
-              ? 'bg-emerald-500/10 border-emerald-500/30'
-              : 'bg-slate-800/50 border-slate-700'
-          )}>
-            {hasYoutubeApiKey ? (
-              <>
-                <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                <div className="flex-1">
-                  <div className="text-emerald-400 font-medium">
-                    YouTube API Key {youtubeKeyIsGlobal ? '(Global)' : 'Configured'}
-                  </div>
-                  <div className="text-sm text-slate-400">Duration filtering is enabled</div>
-                </div>
-              </>
-            ) : (
-              <>
-                <AlertCircle className="w-5 h-5 text-slate-500 flex-shrink-0" />
-                <div className="flex-1">
-                  <div className="text-slate-300 font-medium">YouTube API Key Not Configured</div>
-                  <div className="text-sm text-slate-400">Add YOUTUBE_API_KEY to Vercel environment variables for duration filtering</div>
-                </div>
-              </>
-            )}
-          </div>
-
           {/* Default Auto-Ingest */}
           <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg">
             <div>
