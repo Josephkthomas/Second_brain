@@ -6,6 +6,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { fetchVideoDurationsFromAPI } from './utils/youtube-api';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -326,23 +327,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
           }
 
-          // Fetch duration for each video and filter out Shorts
-          console.log(`[channels] Checking duration for ${videos.length} videos...`);
-          const videosWithDuration = await Promise.all(
-            videos.map(async (video) => {
-              const duration = await getVideoDuration(video.video_id);
-              console.log(`[channels] Video "${video.title}" duration: ${duration}s`);
-              return { ...video, duration_seconds: duration };
-            })
-          );
+          // Get user's YouTube API key for reliable duration fetching
+          let youtubeApiKey: string | null = null;
+          try {
+            const { data: userSettings } = await supabase
+              .from('youtube_settings')
+              .select('youtube_api_key')
+              .eq('user_id', user.id)
+              .single();
+            youtubeApiKey = userSettings?.youtube_api_key || null;
+          } catch {
+            // Settings may not exist
+          }
+
+          // Fetch durations - prefer YouTube API, fall back to scraping
+          let videosWithDuration: (typeof videos[0] & { duration_seconds: number | null })[];
+
+          if (youtubeApiKey) {
+            console.log(`[channels] Using YouTube API for duration fetching`);
+            const videoIds = videos.map(v => v.video_id);
+            const durationsMap = await fetchVideoDurationsFromAPI(videoIds, youtubeApiKey);
+            videosWithDuration = videos.map(video => ({
+              ...video,
+              duration_seconds: durationsMap.get(video.video_id) ?? null,
+            }));
+          } else {
+            console.log(`[channels] No YouTube API key, using scraping fallback`);
+            videosWithDuration = await Promise.all(
+              videos.map(async (video) => {
+                const duration = await getVideoDuration(video.video_id);
+                console.log(`[channels] Video "${video.title}" duration: ${duration}s`);
+                return { ...video, duration_seconds: duration };
+              })
+            );
+          }
 
           // Filter by channel duration settings
-          // NOTE: If duration is unknown (YouTube blocking), INCLUDE the video to avoid blocking all content
           const filteredVideos = videosWithDuration.filter(v => {
-            // If we couldn't get duration, INCLUDE the video (YouTube may be rate-limiting)
+            // Handle unknown duration based on whether we used the API
             if (v.duration_seconds === null) {
-              console.log(`[channels] Including "${v.title}" - unknown duration (YouTube may be blocking)`);
-              return true;
+              if (youtubeApiKey) {
+                // With API, null means video is unavailable - exclude
+                console.log(`[channels] Excluding "${v.title}" - video unavailable`);
+                return false;
+              } else {
+                // Without API, include to avoid blocking all content
+                console.log(`[channels] Including "${v.title}" - unknown duration (no API key)`);
+                return true;
+              }
             }
 
             // Check minimum duration
