@@ -2,7 +2,7 @@
 // Displays channels, queue, and settings tabs
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Youtube, Plus, Settings, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
+import { Youtube, Plus, Settings, RefreshCw, Loader2, AlertCircle, Wrench } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { getSupabase, getCurrentUserId } from '../../services/supabase';
@@ -12,6 +12,7 @@ import QueueStatusPanel from './QueueStatusPanel';
 import ScanHistoryPanel from './ScanHistoryPanel';
 import AddChannelModal from './AddChannelModal';
 import YouTubeSettingsModal from './YouTubeSettingsModal';
+import ChannelRepairModal from './ChannelRepairModal';
 
 type TabType = 'channels' | 'queue' | 'history';
 
@@ -31,6 +32,7 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showRepairModal, setShowRepairModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Fetch all data
@@ -154,6 +156,14 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
             title="Refresh"
           >
             <RefreshCw className={clsx('w-5 h-5', isRefreshing && 'animate-spin')} />
+          </button>
+
+          <button
+            onClick={() => setShowRepairModal(true)}
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+            title="Repair Channel IDs"
+          >
+            <Wrench className="w-5 h-5" />
           </button>
 
           <button
@@ -299,6 +309,16 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
           settings={settings}
           onClose={() => setShowSettingsModal(false)}
           onSuccess={handleSettingsUpdated}
+        />
+      )}
+
+      {showRepairModal && (
+        <ChannelRepairModal
+          onClose={() => setShowRepairModal(false)}
+          onRepaired={() => {
+            setShowRepairModal(false);
+            fetchData();
+          }}
         />
       )}
     </div>
