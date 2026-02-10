@@ -11,9 +11,10 @@ import {
   Search, Move, Sparkles, Hand, Cable, ChevronRight, Layers, Copy, Pin, CheckSquare, Square,
   Keyboard, Command, CornerDownLeft, Filter, User, Bot
 } from 'lucide-react';
-import { fetchTableData, deleteRows, insertRows, mergeNodes } from '../services/supabase';
-import { generateCrossConnections, suggestRelationship } from '../services/gemini';
+import { fetchTableData, deleteRows, insertRows, mergeNodes, getCurrentUserId, fetchExistingNodes, fetchRelevantNodes, semanticSearchNodesExtended, getSupabase } from '../services/supabase';
+import { generateCrossConnections, suggestRelationship, generateEmbedding, connectAnchorToKnowledgeEnhanced, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
 import { promoteToAnchor, demoteFromAnchor } from '../services/anchorService';
+import AnchorScanReviewModal from './AnchorScanReviewModal';
 import { GraphConfig, GraphNode, GraphLink, LensType } from '../types';
 import { LENS_CONFIG } from '../constants';
 import { getEntityConfig, ENTITY_THEME } from '../utils/theme';
@@ -785,6 +786,14 @@ export const GraphView: React.FC<GraphViewProps> = ({
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
 
+  // Anchor Rescan State (for scanning existing anchors for new connections)
+  const [isRescanScanning, setIsRescanScanning] = useState(false);
+  const [rescanProgress, setRescanProgress] = useState<BatchScanProgress | null>(null);
+  const [rescanConnections, setRescanConnections] = useState<ConnectionCandidate[]>([]);
+  const [showRescanModal, setShowRescanModal] = useState(false);
+  const [rescanAnchorNode, setRescanAnchorNode] = useState<GraphNode | null>(null);
+  const [rescanStatusMessage, setRescanStatusMessage] = useState('');
+
   // Omnibar State
   const [omnibarOpen, setOmnibarOpen] = useState(false);
   const [omnibarQuery, setOmnibarQuery] = useState('');
@@ -828,6 +837,190 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const exitAnchorMode = () => {
       onLensChange('All');
       setFocusedAnchorId(null);
+  };
+
+  // Rescan anchor for new connections
+  const handleRescanAnchor = async (anchor: GraphNode) => {
+    setRescanAnchorNode(anchor);
+    setIsRescanScanning(true);
+    setRescanStatusMessage('Generating embedding...');
+    setRescanProgress({
+      phase: 'semantic_search',
+      totalBatches: 1,
+      currentBatch: 1,
+      nodesProcessed: 0,
+      totalNodes: 200,
+      connectionsFound: 0
+    });
+
+    try {
+      // Step 1: Get or generate embedding for anchor
+      const embeddingText = `${anchor.label}: ${anchor.data.description || ''}`;
+      let embedding: number[] = anchor.data.embedding || [];
+
+      if (!embedding || embedding.length === 0) {
+        embedding = await generateEmbedding(embeddingText);
+        // Save embedding to database
+        if (embedding.length > 0) {
+          const supabase = getSupabase();
+          await supabase.from('knowledge_nodes').update({ embedding }).eq('id', anchor.id);
+          console.log('[Anchor Rescan] Generated and saved embedding');
+        }
+      }
+
+      setRescanStatusMessage('Searching database for related knowledge...');
+
+      // Step 2: HYBRID RETRIEVAL - semantic + keyword + recent
+      const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }>();
+
+      // Semantic search
+      if (embedding && embedding.length > 0) {
+        const semanticResults = await semanticSearchNodesExtended(embedding, 0.15, 150);
+        semanticResults.forEach(n => {
+          if (n.id !== anchor.id) { // Exclude the anchor itself
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: n.similarity
+            });
+          }
+        });
+        console.log(`[Anchor Rescan] Semantic search found ${semanticResults.length} nodes`);
+      }
+
+      // Keyword search
+      const anchorText = `${anchor.label} ${anchor.data.description || ''}`;
+      const keywords = anchorText
+        .toLowerCase()
+        .split(/[\s,.\-_:;()]+/)
+        .filter(word => word.length > 3)
+        .filter(word => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been'].includes(word));
+
+      if (keywords.length > 0) {
+        const keywordResults = await fetchRelevantNodes(keywords.slice(0, 10));
+        keywordResults.forEach(n => {
+          if (n.id !== anchor.id && !nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.5
+            });
+          }
+        });
+        console.log(`[Anchor Rescan] Keyword search found ${keywordResults.length} additional nodes`);
+      }
+
+      // Recent nodes as fallback
+      if (nodeMap.size < 50) {
+        const recentNodes = await fetchExistingNodes();
+        recentNodes.forEach(n => {
+          if (n.id !== anchor.id && !nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.3
+            });
+          }
+        });
+        console.log(`[Anchor Rescan] Added ${recentNodes.length} recent nodes as supplement`);
+      }
+
+      // Convert and sort
+      let nodesToAnalyze = Array.from(nodeMap.values())
+        .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
+        .slice(0, 200);
+
+      console.log(`[Anchor Rescan] Total nodes to analyze: ${nodesToAnalyze.length}`);
+
+      if (nodesToAnalyze.length === 0) {
+        setIsRescanScanning(false);
+        setRescanProgress(null);
+        setRescanStatusMessage('');
+        return;
+      }
+
+      // Step 3: AI Analysis
+      setRescanStatusMessage('Analyzing connections with AI...');
+      setRescanProgress({
+        phase: 'ai_analysis',
+        totalBatches: 1,
+        currentBatch: 1,
+        nodesProcessed: 0,
+        totalNodes: nodesToAnalyze.length,
+        connectionsFound: 0
+      });
+
+      const connections = await connectAnchorToKnowledgeEnhanced(
+        { label: anchor.label, type: anchor.type, description: anchor.data.description },
+        nodesToAnalyze
+      );
+
+      console.log(`[Anchor Rescan] AI found ${connections.length} connections`);
+
+      // Show review modal
+      setRescanConnections(connections);
+      setShowRescanModal(true);
+      setIsRescanScanning(false);
+      setRescanProgress(null);
+      setRescanStatusMessage('');
+
+    } catch (err: any) {
+      console.error('[Anchor Rescan] Error:', err);
+      setError(err.message || 'Rescan failed');
+      setIsRescanScanning(false);
+      setRescanProgress(null);
+      setRescanStatusMessage('');
+    }
+  };
+
+  // Confirm selected connections from rescan
+  const handleConfirmRescanConnections = async (selectedConnections: ConnectionCandidate[]) => {
+    const anchor = rescanAnchorNode;
+    if (!anchor) return;
+
+    setShowRescanModal(false);
+
+    try {
+      const supabase = getSupabase();
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      if (selectedConnections.length > 0) {
+        const edgesToInsert = selectedConnections.map(c => ({
+          source_node_id: anchor.id,
+          target_node_id: c.target_node_id,
+          relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
+          evidence: c.evidence,
+          weight: c.confidence,
+          user_id: userId,
+        }));
+
+        await supabase.from('knowledge_edges').insert(edgesToInsert);
+        console.log(`[Anchor Rescan] Saved ${selectedConnections.length} connections`);
+
+        // Refresh graph to show new connections
+        loadGraphData();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to save connections');
+    } finally {
+      setRescanAnchorNode(null);
+      setRescanConnections([]);
+    }
+  };
+
+  // Cancel rescan review
+  const handleCancelRescan = () => {
+    setShowRescanModal(false);
+    setRescanConnections([]);
+    setRescanAnchorNode(null);
+    setRescanProgress(null);
   };
 
   const availableAnchors = useMemo(() => {
@@ -2691,7 +2884,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                             </div>
                             
                             {activeLens !== 'AnchorFocus' && (
-                                <button 
+                                <button
                                     onClick={() => enterAnchorMode(selectedNode.id)}
                                     className="flex items-center justify-center gap-2 w-full py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-400 rounded-lg text-xs font-bold uppercase tracking-wider transition-all mb-2"
                                 >
@@ -2703,6 +2896,23 @@ export const GraphView: React.FC<GraphViewProps> = ({
                                     Currently Inspecting Gravitational Field
                                 </div>
                             )}
+                            {/* Scan for Connections button */}
+                            <button
+                                onClick={() => handleRescanAnchor(selectedNode)}
+                                disabled={isRescanScanning}
+                                className="flex items-center justify-center gap-2 w-full py-2 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/50 text-cyan-400 rounded-lg text-xs font-bold uppercase tracking-wider transition-all mb-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isRescanScanning ? (
+                                    <>
+                                        <Loader2 size={14} className="animate-spin" />
+                                        {rescanStatusMessage || 'Scanning...'}
+                                    </>
+                                ) : (
+                                    <>
+                                        <Search size={14} /> Scan for Connections
+                                    </>
+                                )}
+                            </button>
                         </div>
                      )
                   })() : (
@@ -2854,6 +3064,19 @@ export const GraphView: React.FC<GraphViewProps> = ({
         <div
           className="fixed inset-0 z-[9998]"
           onClick={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Anchor Rescan Review Modal */}
+      {showRescanModal && rescanAnchorNode && (
+        <AnchorScanReviewModal
+          anchorName={rescanAnchorNode.label}
+          anchorType={rescanAnchorNode.type}
+          connections={rescanConnections}
+          scanProgress={rescanProgress}
+          isScanning={isRescanScanning}
+          onConfirm={handleConfirmRescanConnections}
+          onCancel={handleCancelRescan}
         />
       )}
     </div>

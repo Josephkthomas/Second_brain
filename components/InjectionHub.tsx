@@ -79,8 +79,15 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
 
   // Anchor Form State
   const [anchorName, setAnchorName] = useState('');
-  const [anchorType, setAnchorType] = useState('Project');
+  const [anchorType, setAnchorType] = useState('Topic');
   const [anchorDescription, setAnchorDescription] = useState('');
+  const [anchorStrength, setAnchorStrength] = useState<number | undefined>(undefined);
+
+  // Full list of entity types for anchors (matching AnchorManager)
+  const ANCHOR_ENTITY_TYPES = [
+    'Topic', 'Project', 'Goal', 'Concept', 'Person',
+    'Organization', 'Technology', 'Decision', 'Insight'
+  ];
   const [isSavingAnchor, setIsSavingAnchor] = useState(false);
   const [anchorStatusMessage, setAnchorStatusMessage] = useState('');
 
@@ -226,7 +233,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         }
 
         // 1. Create the Anchor
-        const { data: newAnchor, error } = await createAnchor(anchorName.trim(), anchorType, anchorDescription.trim());
+        const { data: newAnchor, error } = await createAnchor(anchorName.trim(), anchorType, anchorDescription.trim(), anchorStrength);
         if (error) throw error;
 
         // 2. Vectorize the Anchor (Immediate Neural Pathway)
@@ -1080,23 +1087,33 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                                 <input value={anchorName} onChange={(e) => setAnchorName(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-amber-500 outline-none" placeholder="e.g. Project Apollo"/>
                             </div>
                             
-                            <div>
-                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Entity Type</label>
-                                <div className="grid grid-cols-3 gap-3">
-                                    {['Project', 'Goal', 'Topic'].map(t => (
-                                        <button 
-                                            key={t}
-                                            onClick={() => setAnchorType(t)}
-                                            className={clsx(
-                                                "py-2 rounded-lg text-sm font-bold border transition-all",
-                                                anchorType === t 
-                                                    ? "bg-amber-600/20 border-amber-500 text-amber-400" 
-                                                    : "bg-slate-950 border-slate-700 text-slate-400 hover:bg-slate-900"
-                                            )}
-                                        >
-                                            {t}
-                                        </button>
-                                    ))}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Entity Type</label>
+                                    <select
+                                        value={anchorType}
+                                        onChange={(e) => setAnchorType(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-amber-500 outline-none cursor-pointer appearance-none"
+                                    >
+                                        {ANCHOR_ENTITY_TYPES.map(type => (
+                                            <option key={type} value={type} className="bg-slate-900">{type}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Priority (Optional)</label>
+                                    <select
+                                        value={anchorStrength || ''}
+                                        onChange={(e) => setAnchorStrength(e.target.value ? parseInt(e.target.value) : undefined)}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-amber-500 outline-none cursor-pointer appearance-none"
+                                    >
+                                        <option value="" className="bg-slate-900">No priority set</option>
+                                        <option value="5" className="bg-slate-900">5 - Highest Priority</option>
+                                        <option value="4" className="bg-slate-900">4 - High Priority</option>
+                                        <option value="3" className="bg-slate-900">3 - Medium Priority</option>
+                                        <option value="2" className="bg-slate-900">2 - Low Priority</option>
+                                        <option value="1" className="bg-slate-900">1 - Lowest Priority</option>
+                                    </select>
                                 </div>
                             </div>
 
