@@ -25,6 +25,9 @@ export interface YouTubeChannel {
   anchor_emphasis: AnchorEmphasis;
   linked_anchor_ids: string[];   // UUID array
   custom_instructions: string | null;
+  // Duration filter settings
+  min_video_duration: number | null;  // Minimum video duration in seconds (default 90 = 1.5 min)
+  max_video_duration: number | null;  // Maximum video duration in seconds (null = unlimited)
   // Tracking
   last_checked_at: string | null;
   last_polled_at: string | null;  // Alias for last_checked_at in DB
@@ -120,6 +123,8 @@ export interface AddChannelFormData {
   linked_anchor_ids?: string[];
   custom_instructions?: string;
   backfill_count?: number;       // How many recent videos to backfill
+  min_video_duration?: number;   // Minimum duration in seconds (default 90)
+  max_video_duration?: number | null;  // Maximum duration in seconds (null = unlimited)
 }
 
 /**
@@ -132,6 +137,8 @@ export interface UpdateChannelFormData {
   linked_anchor_ids?: string[];
   custom_instructions?: string;
   is_active?: boolean;
+  min_video_duration?: number;
+  max_video_duration?: number | null;
 }
 
 /**
@@ -265,12 +272,14 @@ export const DEFAULT_YOUTUBE_SETTINGS: Omit<YouTubeSettings, 'id' | 'user_id' | 
 /**
  * Default channel settings
  */
-export const DEFAULT_CHANNEL_SETTINGS: Pick<YouTubeChannel, 'auto_ingest' | 'extraction_mode' | 'anchor_emphasis' | 'linked_anchor_ids' | 'custom_instructions'> = {
+export const DEFAULT_CHANNEL_SETTINGS: Pick<YouTubeChannel, 'auto_ingest' | 'extraction_mode' | 'anchor_emphasis' | 'linked_anchor_ids' | 'custom_instructions' | 'min_video_duration' | 'max_video_duration'> = {
   auto_ingest: true,
   extraction_mode: 'comprehensive',
   anchor_emphasis: 'standard',
   linked_anchor_ids: [],
   custom_instructions: null,
+  min_video_duration: 90,  // 1.5 minutes (skip Shorts)
+  max_video_duration: null,  // Unlimited
 };
 
 /**

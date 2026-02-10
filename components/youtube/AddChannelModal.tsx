@@ -1,7 +1,7 @@
 // AddChannelModal - Modal for adding a new YouTube channel
 
 import React, { useState, useEffect } from 'react';
-import { X, Youtube, Loader2, AlertCircle, CheckCircle, Link, Tag, Settings2 } from 'lucide-react';
+import { X, Youtube, Loader2, AlertCircle, CheckCircle, Link, Tag, Settings2, Clock } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { fetchAnchors } from '../../services/supabase';
@@ -36,6 +36,10 @@ export default function AddChannelModal({ onClose, onSuccess }: AddChannelModalP
   const [linkedAnchorIds, setLinkedAnchorIds] = useState<string[]>([]);
   const [customInstructions, setCustomInstructions] = useState('');
   const [backfillCount, setBackfillCount] = useState(5);
+
+  // Duration filter settings (in minutes for UI, converted to seconds for API)
+  const [minDurationMinutes, setMinDurationMinutes] = useState(1.5);  // Default 1.5 min to skip Shorts
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState<number | null>(null);  // Default unlimited
 
   // UI state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -79,6 +83,8 @@ export default function AddChannelModal({ onClose, onSuccess }: AddChannelModalP
           linked_anchor_ids: linkedAnchorIds,
           custom_instructions: customInstructions.trim() || null,
           backfill_count: backfillCount,
+          min_video_duration: Math.round(minDurationMinutes * 60),  // Convert to seconds
+          max_video_duration: maxDurationMinutes ? Math.round(maxDurationMinutes * 60) : null,
         }),
       });
 
@@ -200,6 +206,48 @@ export default function AddChannelModal({ onClose, onSuccess }: AddChannelModalP
               </div>
             </div>
           )}
+
+          {/* Video Duration Filter */}
+          <div>
+            <label className="block text-sm font-medium text-white mb-2">
+              <Clock className="w-4 h-4 inline mr-2" />
+              Video Duration Filter
+            </label>
+            <p className="text-xs text-slate-500 mb-3">
+              Only process videos within this duration range
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Minimum (minutes)</label>
+                <input
+                  type="number"
+                  value={minDurationMinutes}
+                  onChange={(e) => setMinDurationMinutes(Math.max(0, parseFloat(e.target.value) || 0))}
+                  min={0}
+                  step={0.5}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-red-500 focus:outline-none"
+                  placeholder="1.5"
+                />
+                <p className="text-xs text-slate-500 mt-1">Default 1.5 min skips Shorts</p>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Maximum (minutes)</label>
+                <input
+                  type="number"
+                  value={maxDurationMinutes ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setMaxDurationMinutes(val === '' ? null : Math.max(0, parseFloat(val) || 0));
+                  }}
+                  min={0}
+                  step={5}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-red-500 focus:outline-none"
+                  placeholder="Unlimited"
+                />
+                <p className="text-xs text-slate-500 mt-1">Leave empty for no limit</p>
+              </div>
+            </div>
+          </div>
 
           {/* Backfill */}
           <div>

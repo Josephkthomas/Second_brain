@@ -10,9 +10,11 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Minimum video duration in seconds (skip YouTube Shorts)
-const MIN_VIDEO_DURATION = 60;
-const MAX_VIDEOS_TO_FETCH = 20;
+// Default duration settings (used as fallback)
+const DEFAULT_MIN_DURATION = 90;  // 1.5 minutes (skip Shorts)
+const DEFAULT_MAX_DURATION = null;  // Unlimited
+const MAX_VIDEOS_TO_RETURN = 15;  // Return top 15 matching videos
+const MAX_VIDEOS_TO_FETCH = 30;  // Fetch more to have buffer after filtering
 
 // Helper to verify JWT and get user
 async function verifyAuth(req: VercelRequest) {
@@ -186,10 +188,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'channel_id is required' });
       }
 
-      // Verify channel belongs to user
+      // Verify channel belongs to user and get duration settings
       const { data: channel, error: channelError } = await supabase
         .from('youtube_channels')
-        .select('id, channel_id, channel_name')
+        .select('id, channel_id, channel_name, min_video_duration, max_video_duration')
         .eq('id', channel_id)
         .eq('user_id', user.id)
         .single();
@@ -198,7 +200,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ error: 'Channel not found' });
       }
 
-      console.log(`[Scan] Scanning channel: ${channel.channel_name}`);
+      // Get channel-specific duration settings (with defaults)
+      const minDuration = channel.min_video_duration ?? DEFAULT_MIN_DURATION;
+      const maxDuration = channel.max_video_duration ?? DEFAULT_MAX_DURATION;
+
+      console.log(`[Scan] Scanning channel: ${channel.channel_name} (min: ${minDuration}s, max: ${maxDuration || 'unlimited'})`);
 
       // Fetch recent videos from RSS
       const videos = await fetchChannelVideosFromRSS(channel.channel_id);
@@ -219,16 +225,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
       );
 
-      // Filter out Shorts
-      const longFormVideos = videosWithDuration.filter(v => {
-        if (v.duration_seconds !== null && v.duration_seconds < MIN_VIDEO_DURATION) {
-          return false;
-        }
+      // Filter videos by channel-specific duration settings
+      const filteredVideos = videosWithDuration.filter(v => {
+        // If we couldn't get duration, include it (benefit of the doubt)
+        if (v.duration_seconds === null) return true;
+
+        // Check minimum duration
+        if (v.duration_seconds < minDuration) return false;
+
+        // Check maximum duration (if set)
+        if (maxDuration !== null && v.duration_seconds > maxDuration) return false;
+
         return true;
-      });
+      }).slice(0, MAX_VIDEOS_TO_RETURN);  // Limit to top 15 matching videos
 
       // Get existing queue items for these videos
-      const videoIds = longFormVideos.map(v => v.video_id);
+      const videoIds = filteredVideos.map(v => v.video_id);
       const { data: existingItems } = await supabase
         .from('youtube_ingestion_queue')
         .select('id, video_id, status')
@@ -240,7 +252,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       // Build result with status
-      const results: ScanVideoResult[] = longFormVideos.map(video => {
+      const results: ScanVideoResult[] = filteredVideos.map(video => {
         const existing = existingMap.get(video.video_id);
         let status: ScanVideoResult['status'] = 'new';
         let queue_item_id: string | undefined;
@@ -307,6 +319,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           new: newCount,
           queued: queuedCount,
           completed: completedCount,
+        },
+        duration_filter: {
+          min_seconds: minDuration,
+          max_seconds: maxDuration,
         },
       });
     }

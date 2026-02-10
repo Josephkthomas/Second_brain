@@ -12,8 +12,9 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Minimum video duration in seconds (skip YouTube Shorts)
-const MIN_VIDEO_DURATION = 60;
+// Default video duration settings
+const DEFAULT_MIN_DURATION = 90;  // 1.5 minutes (skip Shorts)
+const DEFAULT_MAX_DURATION = null;  // Unlimited
 
 // Fetch video duration in seconds from YouTube
 async function getVideoDuration(videoId: string): Promise<number | null> {
@@ -196,6 +197,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         linked_anchor_ids = [],
         custom_instructions = null,
         backfill_count = 0,
+        min_video_duration = DEFAULT_MIN_DURATION,
+        max_video_duration = DEFAULT_MAX_DURATION,
       } = req.body;
 
       console.log('[channels] channel_url:', channel_url);
@@ -244,6 +247,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           anchor_emphasis,
           linked_anchor_ids,
           custom_instructions,
+          min_video_duration,
+          max_video_duration,
           is_active: true,
           total_videos_ingested: 0,
         })
@@ -299,20 +304,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             })
           );
 
-          // Filter out Shorts (< 60 seconds), but keep videos with unknown duration
-          const longFormVideos = videosWithDuration.filter(v => {
-            if (v.duration_seconds !== null && v.duration_seconds < MIN_VIDEO_DURATION) {
-              console.log(`[channels] Skipping Short: "${v.title}" (${v.duration_seconds}s)`);
+          // Filter by channel duration settings
+          const filteredVideos = videosWithDuration.filter(v => {
+            // Keep videos with unknown duration (benefit of the doubt)
+            if (v.duration_seconds === null) return true;
+
+            // Check minimum duration
+            if (v.duration_seconds < min_video_duration) {
+              console.log(`[channels] Skipping (too short): "${v.title}" (${v.duration_seconds}s < ${min_video_duration}s)`);
               return false;
             }
+
+            // Check maximum duration (if set)
+            if (max_video_duration !== null && v.duration_seconds > max_video_duration) {
+              console.log(`[channels] Skipping (too long): "${v.title}" (${v.duration_seconds}s > ${max_video_duration}s)`);
+              return false;
+            }
+
             return true;
           });
 
-          console.log(`[channels] ${longFormVideos.length}/${videos.length} videos are long-form`);
+          console.log(`[channels] ${filteredVideos.length}/${videos.length} videos match duration filter`);
 
           // Add videos to queue
-          if (longFormVideos.length > 0) {
-            const queueItems = longFormVideos.map(video => ({
+          if (filteredVideos.length > 0) {
+            const queueItems = filteredVideos.map(video => ({
               user_id: user.id,
               channel_id: data.id,
               video_id: video.video_id,
@@ -352,7 +368,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const allowedUpdates: Record<string, any> = {};
       const allowedFields = [
         'auto_ingest', 'extraction_mode', 'anchor_emphasis',
-        'linked_anchor_ids', 'custom_instructions', 'is_active'
+        'linked_anchor_ids', 'custom_instructions', 'is_active',
+        'min_video_duration', 'max_video_duration'
       ];
 
       for (const field of allowedFields) {
