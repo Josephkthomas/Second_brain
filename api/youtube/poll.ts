@@ -182,10 +182,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     console.log('[Poll] Starting YouTube channel poll...');
 
-    // Fetch all active channels with their duration settings
+    // Fetch all active channels (only query columns that definitely exist)
     const { data: channels, error: channelsError } = await supabase
       .from('youtube_channels')
-      .select('id, user_id, channel_id, channel_name, last_checked_at, auto_ingest, min_video_duration, max_video_duration')
+      .select('id, user_id, channel_id, channel_name, last_checked_at, auto_ingest')
       .eq('is_active', true)
       .eq('auto_ingest', true);
 
@@ -209,9 +209,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Process each channel
     for (const channel of channels) {
       try {
-        // Get channel-specific duration settings
-        const minDuration = channel.min_video_duration ?? DEFAULT_MIN_DURATION;
-        const maxDuration = channel.max_video_duration ?? DEFAULT_MAX_DURATION;
+        // Try to get duration settings (columns may not exist yet)
+        let minDuration = DEFAULT_MIN_DURATION;
+        let maxDuration: number | null = DEFAULT_MAX_DURATION;
+
+        try {
+          const { data: settings } = await supabase
+            .from('youtube_channels')
+            .select('min_video_duration, max_video_duration')
+            .eq('id', channel.id)
+            .single();
+
+          if (settings?.min_video_duration !== undefined) {
+            minDuration = settings.min_video_duration ?? DEFAULT_MIN_DURATION;
+          }
+          if (settings?.max_video_duration !== undefined) {
+            maxDuration = settings.max_video_duration;
+          }
+        } catch {
+          // Duration columns may not exist - use defaults
+        }
 
         console.log(`[Poll] Polling: ${channel.channel_name} (min: ${minDuration}s, max: ${maxDuration || 'unlimited'})`);
 

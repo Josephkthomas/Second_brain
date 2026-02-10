@@ -225,24 +225,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'channel_id is required' });
       }
 
-      // Verify channel belongs to user and get duration settings
+      // Verify channel belongs to user (ONLY query columns that exist in production)
       const { data: channel, error: channelError } = await supabase
         .from('youtube_channels')
-        .select('id, channel_id, channel_name, min_video_duration, max_video_duration')
+        .select('id, channel_id, channel_name')
         .eq('id', channel_id)
         .eq('user_id', user.id)
         .single();
 
       if (channelError || !channel) {
+        console.error('[Scan] Channel error:', channelError);
         return res.status(404).json({ error: 'Channel not found' });
       }
 
-      // Get channel-specific duration settings (with defaults)
-      const minDuration = channel.min_video_duration ?? DEFAULT_MIN_DURATION;
-      const maxDuration = channel.max_video_duration ?? DEFAULT_MAX_DURATION;
+      // Try to get duration settings (columns may not exist yet)
+      let minDuration = DEFAULT_MIN_DURATION;
+      let maxDuration: number | null = DEFAULT_MAX_DURATION;
 
-      console.log(`[Scan] Scanning channel: ${channel.channel_name}`);
-      console.log(`[Scan] YouTube channel_id: ${channel.channel_id}`);
+      try {
+        const { data: settings } = await supabase
+          .from('youtube_channels')
+          .select('min_video_duration, max_video_duration')
+          .eq('id', channel_id)
+          .single();
+
+        if (settings?.min_video_duration !== undefined) {
+          minDuration = settings.min_video_duration ?? DEFAULT_MIN_DURATION;
+        }
+        if (settings?.max_video_duration !== undefined) {
+          maxDuration = settings.max_video_duration;
+        }
+      } catch {
+        console.log('[Scan] Duration columns not available, using defaults');
+      }
+
+      console.log(`[Scan] Scanning: ${channel.channel_name} (${channel.channel_id})`);
       console.log(`[Scan] Duration filter: min=${minDuration}s, max=${maxDuration || 'unlimited'}`);
 
       // Fetch recent videos from RSS
