@@ -90,6 +90,7 @@ export interface YouTubeSettings {
   id: string;
   user_id: string;
   apify_api_key: string | null;
+  youtube_api_key: string | null;  // YouTube Data API v3 key for duration filtering
   // Global defaults
   default_auto_ingest: boolean;
   default_extraction_mode: ExtractionMode;
@@ -106,6 +107,8 @@ export interface YouTubeSettings {
   // API-added fields (not in DB)
   has_apify_key?: boolean;
   apify_api_key_preview?: string | null;
+  has_youtube_api_key?: boolean;
+  youtube_api_key_preview?: string | null;
 }
 
 // ============================================
@@ -146,6 +149,7 @@ export interface UpdateChannelFormData {
  */
 export interface UpdateSettingsFormData {
   apify_api_key?: string;
+  youtube_api_key?: string;  // YouTube Data API v3 key for duration filtering
   default_auto_ingest?: boolean;
   default_extraction_mode?: ExtractionMode;
   default_anchor_emphasis?: AnchorEmphasis;

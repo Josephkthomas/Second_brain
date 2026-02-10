@@ -108,12 +108,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Check if global Apify API key is configured
+      // Check if user has YouTube API key configured
       data = {
         ...data,
         has_apify_key: !!process.env.APIFY_API_KEY,
         apify_api_key_preview: process.env.APIFY_API_KEY
           ? 'Configured globally'
           : null,
+        has_youtube_api_key: !!data?.youtube_api_key,
+        youtube_api_key_preview: data?.youtube_api_key
+          ? `${data.youtube_api_key.substring(0, 8)}...`
+          : null,
+        // Don't expose the full key
+        youtube_api_key: undefined,
       };
 
       return res.status(200).json({ settings: data });
@@ -172,6 +179,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'max_concurrent_extractions',
         'max_videos_per_channel',
         'daily_video_limit',
+        'youtube_api_key',  // User's personal YouTube Data API key
       ];
 
       const allowedUpdates: Record<string, any> = {};
@@ -220,13 +228,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         data = updated;
       }
 
-      // Add global Apify key status to response
+      // Add API key status to response
       data = {
         ...data,
         has_apify_key: !!process.env.APIFY_API_KEY,
         apify_api_key_preview: process.env.APIFY_API_KEY
           ? 'Configured globally'
           : null,
+        has_youtube_api_key: !!data?.youtube_api_key,
+        youtube_api_key_preview: data?.youtube_api_key
+          ? `${data.youtube_api_key.substring(0, 8)}...`
+          : null,
+        // Don't expose the full key
+        youtube_api_key: undefined,
       };
 
       return res.status(200).json({ settings: data });

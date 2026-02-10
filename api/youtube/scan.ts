@@ -4,6 +4,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { fetchVideoDurationsFromAPI } from './utils/youtube-api';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -306,22 +307,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json(debugResponse);
       }
 
-      // Fetch durations for all videos (in parallel with limit)
-      const videosWithDuration = await Promise.all(
-        videos.map(async (video) => {
-          const duration = await getVideoDuration(video.video_id);
-          return { ...video, duration_seconds: duration };
-        })
-      );
+      // Get user's YouTube API key for reliable duration fetching
+      let youtubeApiKey: string | null = null;
+      try {
+        const { data: userSettings } = await supabase
+          .from('youtube_settings')
+          .select('youtube_api_key')
+          .eq('user_id', user.id)
+          .single();
+        youtubeApiKey = userSettings?.youtube_api_key || null;
+      } catch {
+        // Settings table may not exist or no settings row
+      }
+
+      // Fetch durations - prefer YouTube API, fall back to scraping
+      let videosWithDuration: (typeof videos[0] & { duration_seconds: number | null })[];
+
+      if (youtubeApiKey) {
+        console.log('[Scan] Using YouTube Data API for duration fetching');
+        const videoIds = videos.map(v => v.video_id);
+        const durationsMap = await fetchVideoDurationsFromAPI(videoIds, youtubeApiKey);
+
+        videosWithDuration = videos.map(video => ({
+          ...video,
+          duration_seconds: durationsMap.get(video.video_id) ?? null,
+        }));
+
+        const foundCount = [...durationsMap.values()].filter(d => d !== null).length;
+        console.log(`[Scan] YouTube API returned durations for ${foundCount}/${videoIds.length} videos`);
+      } else {
+        console.log('[Scan] No YouTube API key, using scraping fallback (may be rate-limited)');
+        // Fall back to scraping (likely to be blocked)
+        videosWithDuration = await Promise.all(
+          videos.map(async (video) => {
+            const duration = await getVideoDuration(video.video_id);
+            return { ...video, duration_seconds: duration };
+          })
+        );
+      }
 
       // Filter videos by channel-specific duration settings
-      // NOTE: If duration is unknown (YouTube blocking), INCLUDE the video to avoid blocking all content
       const filteredVideos = videosWithDuration.filter(v => {
-        // If we couldn't get duration, INCLUDE the video (YouTube may be rate-limiting)
-        // Better to include a potential Short than block all content
+        // Handle unknown duration based on whether we used the API or scraping
         if (v.duration_seconds === null) {
-          console.log(`[Scan] Including "${v.title}" - unknown duration (YouTube may be blocking)`);
-          return true;
+          if (youtubeApiKey) {
+            // With API, null means video is deleted/private - exclude it
+            console.log(`[Scan] Excluding "${v.title}" - video unavailable (API returned no data)`);
+            return false;
+          } else {
+            // Without API (scraping blocked), include video to avoid blocking all content
+            console.log(`[Scan] Including "${v.title}" - unknown duration (no API key, scraping blocked)`);
+            return true;
+          }
         }
 
         // Check minimum duration
