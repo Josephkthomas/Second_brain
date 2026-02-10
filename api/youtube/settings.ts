@@ -107,18 +107,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // Check if global Apify API key is configured
-      // Check if user has YouTube API key configured
+      // Check if API keys are configured (global env vars take precedence)
+      const hasGlobalYoutubeKey = !!process.env.YOUTUBE_API_KEY;
+      const hasUserYoutubeKey = !!data?.youtube_api_key;
+
       data = {
         ...data,
         has_apify_key: !!process.env.APIFY_API_KEY,
         apify_api_key_preview: process.env.APIFY_API_KEY
           ? 'Configured globally'
           : null,
-        has_youtube_api_key: !!data?.youtube_api_key,
-        youtube_api_key_preview: data?.youtube_api_key
-          ? `${data.youtube_api_key.substring(0, 8)}...`
-          : null,
+        has_youtube_api_key: hasGlobalYoutubeKey || hasUserYoutubeKey,
+        youtube_api_key_preview: hasGlobalYoutubeKey
+          ? 'Configured globally'
+          : hasUserYoutubeKey
+            ? `${data.youtube_api_key.substring(0, 8)}...`
+            : null,
         // Don't expose the full key
         youtube_api_key: undefined,
       };
@@ -228,17 +232,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         data = updated;
       }
 
-      // Add API key status to response
+      // Add API key status to response (global env vars take precedence)
+      const hasGlobalYoutubeKey = !!process.env.YOUTUBE_API_KEY;
+      const hasUserYoutubeKey = !!data?.youtube_api_key;
+
       data = {
         ...data,
         has_apify_key: !!process.env.APIFY_API_KEY,
         apify_api_key_preview: process.env.APIFY_API_KEY
           ? 'Configured globally'
           : null,
-        has_youtube_api_key: !!data?.youtube_api_key,
-        youtube_api_key_preview: data?.youtube_api_key
-          ? `${data.youtube_api_key.substring(0, 8)}...`
-          : null,
+        has_youtube_api_key: hasGlobalYoutubeKey || hasUserYoutubeKey,
+        youtube_api_key_preview: hasGlobalYoutubeKey
+          ? 'Configured globally'
+          : hasUserYoutubeKey
+            ? `${data.youtube_api_key.substring(0, 8)}...`
+            : null,
         // Don't expose the full key
         youtube_api_key: undefined,
       };

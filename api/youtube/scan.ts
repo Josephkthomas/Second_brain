@@ -307,17 +307,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json(debugResponse);
       }
 
-      // Get user's YouTube API key for reliable duration fetching
-      let youtubeApiKey: string | null = null;
-      try {
-        const { data: userSettings } = await supabase
-          .from('youtube_settings')
-          .select('youtube_api_key')
-          .eq('user_id', user.id)
-          .single();
-        youtubeApiKey = userSettings?.youtube_api_key || null;
-      } catch {
-        // Settings table may not exist or no settings row
+      // Get YouTube API key - prefer global env var, fallback to user's personal key
+      let youtubeApiKey: string | null = process.env.YOUTUBE_API_KEY || null;
+
+      // If no global key, check user's personal key
+      if (!youtubeApiKey) {
+        try {
+          const { data: userSettings } = await supabase
+            .from('youtube_settings')
+            .select('youtube_api_key')
+            .eq('user_id', user.id)
+            .single();
+          youtubeApiKey = userSettings?.youtube_api_key || null;
+        } catch {
+          // Settings table may not exist or no settings row
+        }
       }
 
       // Fetch durations - prefer YouTube API, fall back to scraping

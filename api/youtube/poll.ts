@@ -260,20 +260,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else {
           console.log(`[Poll] Found ${newVideos.length} new videos for ${channel.channel_name}`);
 
-          // Get user's YouTube API key (cached)
-          let youtubeApiKey = userApiKeys.get(channel.user_id);
-          if (youtubeApiKey === undefined) {
-            try {
-              const { data: userSettings } = await supabase
-                .from('youtube_settings')
-                .select('youtube_api_key')
-                .eq('user_id', channel.user_id)
-                .single();
-              youtubeApiKey = userSettings?.youtube_api_key || null;
-            } catch {
-              youtubeApiKey = null;
+          // Get YouTube API key - prefer global env var, fallback to user's personal key (cached)
+          let youtubeApiKey = process.env.YOUTUBE_API_KEY || null;
+
+          // If no global key, check user's personal key (cached per user)
+          if (!youtubeApiKey) {
+            youtubeApiKey = userApiKeys.get(channel.user_id) ?? null;
+            if (youtubeApiKey === null && !userApiKeys.has(channel.user_id)) {
+              try {
+                const { data: userSettings } = await supabase
+                  .from('youtube_settings')
+                  .select('youtube_api_key')
+                  .eq('user_id', channel.user_id)
+                  .single();
+                youtubeApiKey = userSettings?.youtube_api_key || null;
+              } catch {
+                youtubeApiKey = null;
+              }
+              userApiKeys.set(channel.user_id, youtubeApiKey);
             }
-            userApiKeys.set(channel.user_id, youtubeApiKey);
           }
 
           // Fetch durations - prefer YouTube API, fall back to scraping
