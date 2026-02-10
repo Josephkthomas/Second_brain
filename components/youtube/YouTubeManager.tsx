@@ -50,20 +50,26 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
 
       // Fetch channels
       const channelsRes = await fetch('/api/youtube/channels', { headers });
-      if (!channelsRes.ok) throw new Error('Failed to fetch channels');
       const channelsData = await channelsRes.json();
+      if (!channelsRes.ok) {
+        throw new Error(channelsData.error || `Failed to fetch channels (${channelsRes.status})`);
+      }
       setChannels(channelsData.channels || []);
 
       // Fetch queue
       const queueRes = await fetch('/api/youtube/queue?limit=100', { headers });
-      if (!queueRes.ok) throw new Error('Failed to fetch queue');
       const queueData = await queueRes.json();
+      if (!queueRes.ok) {
+        throw new Error(queueData.error || `Failed to fetch queue (${queueRes.status})`);
+      }
       setQueueItems(queueData.items || []);
 
       // Fetch settings
       const settingsRes = await fetch('/api/youtube/settings', { headers });
-      if (!settingsRes.ok) throw new Error('Failed to fetch settings');
       const settingsData = await settingsRes.json();
+      if (!settingsRes.ok) {
+        throw new Error(settingsData.error || `Failed to fetch settings (${settingsRes.status})`);
+      }
       setSettings(settingsData.settings);
 
       // Calculate stats
@@ -119,9 +125,6 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
     setShowSettingsModal(false);
     fetchData();
   };
-
-  // Check if Apify key is configured
-  const hasApifyKey = settings?.has_apify_key;
 
   if (isLoading) {
     return (
@@ -183,25 +186,6 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
           </button>
         </div>
       </div>
-
-      {/* Apify Key Warning */}
-      {!hasApifyKey && (
-        <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-amber-400 font-medium">Apify API Key Required</p>
-            <p className="text-sm text-slate-400 mt-1">
-              To extract video transcripts, you need to configure your Apify API key.{' '}
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="text-amber-400 hover:text-amber-300 underline"
-              >
-                Add your key in Settings
-              </button>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Stats Bar */}
       {stats && (
