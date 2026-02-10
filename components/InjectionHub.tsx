@@ -8,8 +8,8 @@ import {
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
   Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye
 } from 'lucide-react';
-import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledge, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
-import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes } from '../services/supabase';
+import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
+import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
 import AnchorScanReviewModal from './AnchorScanReviewModal';
 import { getEntityConfig } from '../utils/theme';
 import { getExtractionSettingsOrDefaults } from '../services/extractionSettings';
@@ -238,7 +238,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
 
         // 3. Store anchor ref and automatically scan for connections
         pendingAnchorRef.current = newAnchor;
-        await performAutoScan(newAnchor, userId);
+        await performAutoScan(newAnchor, userId, embedding);
 
     } catch (err: any) {
         setSaveError(err.message || "Failed to create anchor");
@@ -248,11 +248,12 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
   };
 
   // Automatic Scan - runs after anchor creation, shows review modal with results
-  const performAutoScan = async (anchor: any, userId: string) => {
+  // Uses semantic search to find relevant nodes (not just recent) + enhanced AI prompting
+  const performAutoScan = async (anchor: any, userId: string, embedding: number[]) => {
     setIsScanning(true);
-    setAnchorStatusMessage('Scanning database for connections...');
+    setAnchorStatusMessage('Finding semantically similar nodes...');
     setScanProgress({
-      phase: 'ai_analysis',
+      phase: 'semantic_search',
       totalBatches: 1,
       currentBatch: 1,
       nodesProcessed: 0,
@@ -261,10 +262,35 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     });
 
     try {
-      // Fetch 100 most recent nodes
-      const existingNodes = await fetchExistingNodes();
+      // Use semantic search to find relevant nodes (not just recent)
+      let nodesToAnalyze: { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }[] = [];
 
-      if (existingNodes.length === 0) {
+      if (embedding && embedding.length > 0) {
+        // Primary: semantic search for similar nodes
+        const semanticResults = await semanticSearchNodesExtended(embedding, 0.3, 100);
+        nodesToAnalyze = semanticResults.map(n => ({
+          id: n.id,
+          label: n.label,
+          entity_type: n.entity_type,
+          description: n.description,
+          similarity_score: n.similarity
+        }));
+        console.log(`Semantic search found ${nodesToAnalyze.length} similar nodes`);
+      }
+
+      // Fallback: if semantic search returns nothing, use recent nodes
+      if (nodesToAnalyze.length === 0) {
+        const recentNodes = await fetchExistingNodes();
+        nodesToAnalyze = recentNodes.map(n => ({
+          id: n.id,
+          label: n.label,
+          entity_type: n.entity_type,
+          description: n.description
+        }));
+        console.log(`Fallback to ${nodesToAnalyze.length} recent nodes`);
+      }
+
+      if (nodesToAnalyze.length === 0) {
         // No nodes to scan - skip to deep mining
         setIsScanning(false);
         setScanProgress(null);
@@ -276,24 +302,28 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         return;
       }
 
-      // Find connections using AI
-      const connections = await connectAnchorToKnowledge(
+      // Update progress for AI analysis phase
+      setAnchorStatusMessage('Analyzing connections with AI...');
+      setScanProgress({
+        phase: 'ai_analysis',
+        totalBatches: 1,
+        currentBatch: 1,
+        nodesProcessed: 0,
+        totalNodes: nodesToAnalyze.length,
+        connectionsFound: 0
+      });
+
+      // Find connections using enhanced AI (includes confidence scoring)
+      const connections = await connectAnchorToKnowledgeEnhanced(
         { label: anchor.label, type: anchor.entity_type, description: anchor.description },
-        existingNodes
+        nodesToAnalyze
       );
 
-      // Convert to ConnectionCandidate format for review modal
-      const candidates: ConnectionCandidate[] = connections.map(c => ({
-        target_node_id: c.target_node_id,
-        target_label: existingNodes.find(n => n.id === c.target_node_id)?.label || 'Unknown',
-        target_type: existingNodes.find(n => n.id === c.target_node_id)?.entity_type || 'Unknown',
-        relation: c.relation,
-        evidence: c.evidence,
-        confidence: 0.75, // Default confidence for quick scan
-      }));
+      // connections are already in ConnectionCandidate format with real confidence scores
+      console.log(`Enhanced AI found ${connections.length} high-confidence connections`);
 
       // Show review modal with results (even if empty, so user knows scan completed)
-      setPendingConnections(candidates);
+      setPendingConnections(connections);
       setShowReviewModal(true);
       setIsScanning(false);
       setScanProgress(null);
