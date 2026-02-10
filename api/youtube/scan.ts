@@ -233,6 +233,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('user_id', user.id)
         .single();
 
+      console.log('[Scan] DB Query result:', {
+        channelError: channelError?.message,
+        channel: channel ? {
+          id: channel.id,
+          channel_id: channel.channel_id,
+          channel_name: channel.channel_name,
+        } : null,
+      });
+
       if (channelError || !channel) {
         console.error('[Scan] Channel error:', channelError);
         return res.status(404).json({ error: 'Channel not found' });
@@ -281,7 +290,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (videos.length === 0) {
         // Return debug info to help diagnose the issue
-        return res.status(200).json({
+        const debugResponse = {
           channel_name: channel.channel_name,
           youtube_channel_id: channel.channel_id,
           rss_url: `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.channel_id}`,
@@ -292,7 +301,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             youtube_channel_id: channel.channel_id,
             duration_filter: { min: minDuration, max: maxDuration },
           }
-        });
+        };
+        console.log('[Scan] 0 videos - returning debug response:', JSON.stringify(debugResponse));
+        return res.status(200).json(debugResponse);
       }
 
       // Fetch durations for all videos (in parallel with limit)
