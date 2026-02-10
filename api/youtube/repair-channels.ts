@@ -174,9 +174,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // POST - Attempt to fix invalid channel IDs
     if (req.method === 'POST') {
-      const { channel_ids } = req.body;  // Optional: specific channel IDs to fix
+      const { channel_ids, force_all } = req.body;  // force_all: re-resolve ALL channels, not just invalid format
 
       console.log('[Repair] Attempting to repair channel IDs for user:', user.id);
+      console.log('[Repair] Force all:', force_all);
 
       // Fetch channels to repair
       let query = supabase
@@ -191,8 +192,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: channels, error } = await query;
       if (error) throw error;
 
-      // Filter to only invalid channels
-      const invalidChannels = (channels || []).filter(c => !isValidChannelId(c.channel_id));
+      // If force_all, repair all channels; otherwise only invalid format
+      const invalidChannels = force_all
+        ? (channels || [])
+        : (channels || []).filter(c => !isValidChannelId(c.channel_id));
 
       if (invalidChannels.length === 0) {
         return res.status(200).json({

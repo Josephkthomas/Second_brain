@@ -76,7 +76,7 @@ export default function ChannelRepairModal({ onClose, onRepaired }: ChannelRepai
     }
   };
 
-  const handleRepairAll = async () => {
+  const handleRepairAll = async (forceAll: boolean = false) => {
     if (!session?.access_token) return;
 
     try {
@@ -90,7 +90,7 @@ export default function ChannelRepairModal({ onClose, onRepaired }: ChannelRepai
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({}),  // Repair all invalid channels
+        body: JSON.stringify({ force_all: forceAll }),  // force_all: re-resolve ALL channels
       });
 
       if (!response.ok) {
@@ -184,8 +184,10 @@ export default function ChannelRepairModal({ onClose, onRepaired }: ChannelRepai
                 <div className="flex items-center gap-3 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
                   <CheckCircle className="w-5 h-5 text-emerald-500 flex-shrink-0" />
                   <div>
-                    <p className="text-emerald-400 font-medium">All channels have valid IDs!</p>
-                    <p className="text-sm text-slate-400">No repair needed.</p>
+                    <p className="text-emerald-400 font-medium">All channels have valid ID format!</p>
+                    <p className="text-sm text-slate-400">
+                      If scanning still fails, use "Verify All IDs" to re-fetch the correct IDs from YouTube.
+                    </p>
                   </div>
                 </div>
               )}
@@ -303,7 +305,7 @@ export default function ChannelRepairModal({ onClose, onRepaired }: ChannelRepai
             </button>
             {stats.invalid > 0 && (
               <button
-                onClick={handleRepairAll}
+                onClick={() => handleRepairAll(false)}
                 disabled={isRepairing || isLoading}
                 className={clsx(
                   'flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors',
@@ -325,6 +327,30 @@ export default function ChannelRepairModal({ onClose, onRepaired }: ChannelRepai
                 )}
               </button>
             )}
+
+            {/* Always show Verify All button to re-resolve channels with possibly wrong IDs */}
+            <button
+              onClick={() => handleRepairAll(true)}
+              disabled={isRepairing || isLoading || stats.total === 0}
+              className={clsx(
+                'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors',
+                isRepairing || isLoading || stats.total === 0
+                  ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                  : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+              )}
+            >
+              {isRepairing ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Verifying...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Verify All IDs
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
