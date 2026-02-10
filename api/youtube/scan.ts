@@ -128,21 +128,41 @@ function decodeHTMLEntities(text: string): string {
 // Fetch videos from RSS feed
 async function fetchChannelVideosFromRSS(channelId: string): Promise<YouTubeVideoFromRSS[]> {
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+  console.log(`[Scan] Fetching RSS from: ${rssUrl}`);
 
   try {
-    const response = await fetch(rssUrl);
+    const response = await fetch(rssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/xml, text/xml, application/atom+xml, */*',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+    });
+
+    console.log(`[Scan] RSS response status: ${response.status}`);
+
     if (!response.ok) {
-      console.error(`RSS fetch failed for ${channelId}: ${response.status}`);
+      console.error(`[Scan] RSS fetch failed for ${channelId}: ${response.status} ${response.statusText}`);
       return [];
     }
 
     const xml = await response.text();
+    console.log(`[Scan] RSS response length: ${xml.length} chars`);
+
+    // Check if response looks like valid RSS/XML
+    if (xml.length < 100 || !xml.includes('<feed')) {
+      console.error(`[Scan] Invalid RSS response - doesn't look like XML feed. First 500 chars: ${xml.substring(0, 500)}`);
+      return [];
+    }
+
     const videos: YouTubeVideoFromRSS[] = [];
 
     const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
     let match;
+    let entryCount = 0;
 
     while ((match = entryRegex.exec(xml)) !== null && videos.length < MAX_VIDEOS_TO_FETCH) {
+      entryCount++;
       const entry = match[1];
 
       const videoIdMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
@@ -164,9 +184,10 @@ async function fetchChannelVideosFromRSS(channelId: string): Promise<YouTubeVide
       });
     }
 
+    console.log(`[Scan] Parsed ${entryCount} entries, extracted ${videos.length} videos`);
     return videos;
   } catch (error) {
-    console.error(`Error fetching RSS for ${channelId}:`, error);
+    console.error(`[Scan] Error fetching RSS for ${channelId}:`, error);
     return [];
   }
 }

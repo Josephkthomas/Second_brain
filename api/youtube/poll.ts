@@ -105,9 +105,16 @@ async function fetchChannelVideosFromRSS(channelId: string): Promise<YouTubeVide
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
 
   try {
-    const response = await fetch(rssUrl);
+    const response = await fetch(rssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/xml, text/xml, application/atom+xml, */*',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+    });
+
     if (!response.ok) {
-      console.error(`RSS fetch failed for ${channelId}: ${response.status}`);
+      console.error(`[Poll] RSS fetch failed for ${channelId}: ${response.status}`);
       return [];
     }
 
