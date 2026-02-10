@@ -284,6 +284,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const queuedCount = results.filter(v => v.status === 'queued').length;
       const completedCount = results.filter(v => v.status === 'completed').length;
 
+      // Log scan to history
+      await supabase.from('youtube_scan_history').insert({
+        user_id: user.id,
+        channel_id: channel.id,
+        scan_type: 'manual_scan',
+        channel_name: channel.channel_name,
+        channel_youtube_id: channel.channel_id,
+        videos_found: results.length,
+        videos_added: 0,
+        videos_skipped: queuedCount + completedCount,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        metadata: { new_count: newCount, queued_count: queuedCount, completed_count: completedCount },
+      });
+
       return res.status(200).json({
         channel_name: channel.channel_name,
         videos: results,
@@ -389,6 +404,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 'Content-Type': 'application/json',
                 'Authorization': req.headers.authorization || '',
               },
+              body: JSON.stringify({ process_all: true }),
             }
           );
 
@@ -401,6 +417,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Don't fail the request, videos are queued
         }
       }
+
+      // Log to scan history
+      await supabase.from('youtube_scan_history').insert({
+        user_id: user.id,
+        channel_id: channel.id,
+        scan_type: 'manual_scan',
+        channel_name: channel.channel_name,
+        channel_youtube_id: channel.channel_id,
+        videos_found: videosToAdd.length,
+        videos_added: queueItems.length,
+        videos_skipped: videosToAdd.length - newVideos.length,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        metadata: { process_immediately },
+      });
 
       return res.status(200).json({
         success: true,

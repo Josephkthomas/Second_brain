@@ -9,10 +9,11 @@ import { getSupabase, getCurrentUserId } from '../../services/supabase';
 import type { YouTubeChannel, YouTubeQueueItem, YouTubeSettings, YouTubeStats } from '../../types/youtube';
 import ChannelList from './ChannelList';
 import QueueStatusPanel from './QueueStatusPanel';
+import ScanHistoryPanel from './ScanHistoryPanel';
 import AddChannelModal from './AddChannelModal';
 import YouTubeSettingsModal from './YouTubeSettingsModal';
 
-type TabType = 'channels' | 'queue' | 'settings';
+type TabType = 'channels' | 'queue' | 'history';
 
 interface YouTubeManagerProps {
   onComplete?: () => void;
@@ -248,6 +249,17 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
         >
           Queue ({queueItems.filter(q => q.status === 'pending' || q.status === 'fetching_transcript' || q.status === 'extracting').length})
         </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all',
+            activeTab === 'history'
+              ? 'bg-slate-800 text-white shadow-sm'
+              : 'text-slate-500 hover:text-slate-300'
+          )}
+        >
+          History
+        </button>
       </div>
 
       {/* Tab Content */}
@@ -267,6 +279,10 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
             onRefresh={fetchData}
             onGraphUpdate={onGraphUpdate}
           />
+        )}
+
+        {activeTab === 'history' && (
+          <ScanHistoryPanel />
         )}
       </div>
 

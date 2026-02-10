@@ -15,8 +15,10 @@ const CRON_SECRET = process.env.CRON_SECRET;
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const getGenAI = () => new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// Max items to process per run (Vercel has 10-60s timeout on free tier)
-const MAX_ITEMS_PER_RUN = 2;
+// Max items to process per batch (Vercel has 10-60s timeout on free tier)
+const MAX_ITEMS_PER_BATCH = 2;
+// Max items to process when user clicks "Process Now" (process_all mode)
+const MAX_ITEMS_PROCESS_ALL = 20;
 
 // Verify cron authorization
 function verifyCronAuth(req: VercelRequest): boolean {
@@ -489,8 +491,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
   const startTime = Date.now();
 
+  // Check for process_all mode (user clicked "Process Now" and wants all items processed)
+  const { process_all = false } = req.body || {};
+  const itemLimit = process_all ? MAX_ITEMS_PROCESS_ALL : MAX_ITEMS_PER_BATCH;
+
   try {
-    console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id})...`);
+    console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id}, process_all: ${process_all})...`);
 
     // Build query for pending items with channel info
     let query = supabase
@@ -499,7 +505,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('status', 'pending')
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })
-      .limit(MAX_ITEMS_PER_RUN);
+      .limit(itemLimit);
 
     // If user-triggered (not cron), only process that user's items
     if (!isCron && user?.id) {
@@ -830,13 +836,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const completed = results.filter(r => r.status === 'completed').length;
     const failed = results.filter(r => r.status === 'failed').length;
 
-    console.log(`[Process] Complete. ${completed} succeeded, ${failed} failed in ${duration}ms`);
+    // Check if there are more items remaining
+    let remainingQuery = supabase
+      .from('youtube_ingestion_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'pending');
+
+    if (!isCron && user?.id) {
+      remainingQuery = remainingQuery.eq('user_id', user.id);
+    }
+
+    const { count: remainingCount } = await remainingQuery;
+
+    console.log(`[Process] Complete. ${completed} succeeded, ${failed} failed, ${remainingCount || 0} remaining in ${duration}ms`);
+
+    // Log to scan history (only if we processed something)
+    if (results.length > 0 && user?.id && user.id !== 'cron') {
+      await supabase.from('youtube_scan_history').insert({
+        user_id: user.id,
+        scan_type: isCron ? 'auto_poll' : 'process',
+        videos_processed: completed,
+        videos_failed: failed,
+        status: failed === 0 ? 'completed' : (completed === 0 ? 'failed' : 'partial'),
+        completed_at: new Date().toISOString(),
+        duration_ms: duration,
+        metadata: { process_all, remaining: remainingCount || 0 },
+      });
+    }
 
     return res.status(200).json({
       success: true,
       processed: results.length,
       completed,
       failed,
+      remaining: remainingCount || 0,
       results,
       duration_ms: duration,
     });

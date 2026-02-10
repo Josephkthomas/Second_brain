@@ -34,6 +34,7 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
   const [statusFilter, setStatusFilter] = useState<YouTubeQueueStatus | 'all'>('all');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState<{ processed: number; remaining: number } | null>(null);
 
   // Filter items
   const filteredItems = items.filter(item => {
@@ -47,34 +48,62 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
     return acc;
   }, {} as Record<string, number>);
 
-  // Process queue now
+  // Process queue now - processes ALL pending videos in batches
   const handleProcessNow = async () => {
     if (!session?.access_token || isProcessingQueue) return;
 
     try {
       setIsProcessingQueue(true);
+      setProcessingProgress({ processed: 0, remaining: statusCounts.pending || 0 });
 
-      const response = await fetch('/api/youtube/process', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
+      let totalProcessed = 0;
+      let totalCompleted = 0;
+      let hasMoreItems = true;
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Processing failed');
+      // Loop until all items are processed
+      while (hasMoreItems) {
+        const response = await fetch('/api/youtube/process', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ process_all: true }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Processing failed');
+        }
+
+        const result = await response.json();
+        console.log('[QueueStatusPanel] Process batch result:', result);
+
+        totalProcessed += result.processed || 0;
+        totalCompleted += result.completed || 0;
+
+        // Update progress
+        setProcessingProgress({
+          processed: totalProcessed,
+          remaining: result.remaining || 0,
+        });
+
+        // Continue if there are more items
+        hasMoreItems = (result.remaining || 0) > 0 && (result.processed || 0) > 0;
+
+        // Refresh list after each batch
+        onRefresh();
+
+        // Small delay between batches to avoid overwhelming the API
+        if (hasMoreItems) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
 
-      const result = await response.json();
-      console.log('[QueueStatusPanel] Process result:', result);
-
-      // Refresh queue list
-      onRefresh();
+      console.log(`[QueueStatusPanel] All processing complete. Total: ${totalProcessed} processed, ${totalCompleted} completed`);
 
       // Refresh the graph to show new nodes and edges
-      if (result.completed > 0 && onGraphUpdate) {
+      if (totalCompleted > 0 && onGraphUpdate) {
         console.log('[QueueStatusPanel] Triggering graph refresh after successful processing');
         onGraphUpdate();
       }
@@ -82,6 +111,7 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
       console.error('Error processing queue:', err);
     } finally {
       setIsProcessingQueue(false);
+      setProcessingProgress(null);
     }
   };
 
@@ -241,7 +271,9 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
             {isProcessingQueue ? (
               <>
                 <Loader2 className="w-3 h-3 animate-spin" />
-                Processing...
+                {processingProgress
+                  ? `Processing... (${processingProgress.processed} done, ${processingProgress.remaining} left)`
+                  : 'Processing...'}
               </>
             ) : (
               <>
