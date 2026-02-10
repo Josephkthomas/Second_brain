@@ -3,13 +3,14 @@ import {
   Bot, ArrowRight, CheckCircle2, AlertCircle, Database, GitMerge, FileText,
   UploadCloud, Loader2, Sparkles, Cpu, BrainCircuit, User, Gavel, Lightbulb,
   Target, Building, HelpCircle, AlertTriangle, CheckSquare, Square, X,
-  ShieldAlert, Flag, Zap, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
+  ShieldAlert, Flag, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
   Youtube, StickyNote, Users, Link as LinkIcon, Calendar, Quote, PieChart, Network, Share2, Search,
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
   Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye
 } from 'lucide-react';
-import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledge, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch } from '../services/gemini';
-import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes } from '../services/supabase';
+import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
+import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
+import AnchorScanReviewModal from './AnchorScanReviewModal';
 import { getEntityConfig } from '../utils/theme';
 import { getExtractionSettingsOrDefaults } from '../services/extractionSettings';
 import { getAllExtractionModes } from '../config/extractionModes';
@@ -82,6 +83,13 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
   const [anchorDescription, setAnchorDescription] = useState('');
   const [isSavingAnchor, setIsSavingAnchor] = useState(false);
   const [anchorStatusMessage, setAnchorStatusMessage] = useState('');
+
+  // Anchor Scan State
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<BatchScanProgress | null>(null);
+  const [pendingConnections, setPendingConnections] = useState<ConnectionCandidate[]>([]);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const pendingAnchorRef = useRef<any>(null);
 
   const [extractedData, setExtractedData] = useState<ExtractedGraph | null>(null);
   
@@ -228,99 +236,274 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              await supabase.from('knowledge_nodes').update({ embedding }).eq('id', newAnchor.id);
         }
 
-        // 3. Retroactive Scan
-        setAnchorStatusMessage('Scanning for existing connections...');
-        const existingNodes = await fetchExistingNodes();
-
-        if (existingNodes.length > 0) {
-             const connections = await connectAnchorToKnowledge(
-                 { label: anchorName, type: anchorType, description: anchorDescription },
-                 existingNodes
-             );
-
-             if (connections.length > 0) {
-                 const edgesToInsert = connections.map(c => ({
-                    source_node_id: newAnchor.id,
-                    target_node_id: c.target_node_id,
-                    relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
-                    evidence: c.evidence,
-                    weight: 1,
-                    user_id: userId,
-                 }));
-
-                 await supabase.from('knowledge_edges').insert(edgesToInsert);
-                 setAnchorStatusMessage(`Linked ${connections.length} existing nodes.`);
-             }
-        }
-
-        // B. DEEP MINING (Agent 4 - Raw Text Search)
-        setAnchorStatusMessage('Deep mining raw sources...');
-
-        // Search for raw transcripts that mention the anchor name or keywords
-        const relevantSources = await searchKnowledgeSources(anchorName);
-
-        if (relevantSources.length > 0) {
-            setAnchorStatusMessage(`Mining ${relevantSources.length} raw docs...`);
-            let minedCount = 0;
-
-            for (const source of relevantSources) {
-               const miningResult = await mineContextFromRawText(
-                 { label: anchorName, type: anchorType, description: anchorDescription },
-                 source
-               );
-
-               if (miningResult.nodes.length > 0) {
-                  // Insert Mined Nodes
-                  const { data: insertedMinedNodes } = await supabase
-                    .from('knowledge_nodes')
-                    .insert(miningResult.nodes.map(n => ({
-                        label: n.label,
-                        entity_type: n.type,
-                        description: n.description,
-                        confidence: n.confidence || 0.8,
-                        source: source.title || 'Retroactive Mining',
-                        source_type: 'Inferred',
-                        source_id: source.id,
-                        quote: n.quote,
-                        user_id: userId,
-                    })))
-                    .select('id, label');
-
-                  // Insert Mined Edges (Link Anchor -> New Node)
-                  if (insertedMinedNodes) {
-                     const minedEdges = miningResult.edges.map(e => {
-                        const targetNode = insertedMinedNodes.find(n => n.label === e.target_label);
-                        if (targetNode) {
-                            return {
-                                source_node_id: newAnchor.id,
-                                target_node_id: targetNode.id,
-                                relation_type: e.relation.toLowerCase().replace(/\s+/g, '_'),
-                                evidence: e.evidence,
-                                weight: 1,
-                                user_id: userId,
-                            };
-                        }
-                        return null;
-                     }).filter(e => e !== null);
-
-                     if (minedEdges.length > 0) {
-                         await supabase.from('knowledge_edges').insert(minedEdges);
-                         minedCount += minedEdges.length;
-                     }
-                  }
-               }
-            }
-            setAnchorStatusMessage(`Deep mining complete. Added ${minedCount} new insights.`);
-        }
-        
-        if (onGraphUpdate) onGraphUpdate();
-        setStep('done');
+        // 3. Store anchor ref and automatically scan for connections
+        pendingAnchorRef.current = newAnchor;
+        await performAutoScan(newAnchor, userId, embedding);
 
     } catch (err: any) {
         setSaveError(err.message || "Failed to create anchor");
         setAnchorStatusMessage('');
-    } finally {
         setIsSavingAnchor(false);
+    }
+  };
+
+  // Automatic Scan - runs after anchor creation, shows review modal with results
+  // Uses HYBRID approach: semantic search + keyword search + recent nodes for comprehensive coverage
+  const performAutoScan = async (anchor: any, userId: string, embedding: number[]) => {
+    setIsScanning(true);
+    setAnchorStatusMessage('Searching database for related knowledge...');
+    setScanProgress({
+      phase: 'semantic_search',
+      totalBatches: 1,
+      currentBatch: 1,
+      nodesProcessed: 0,
+      totalNodes: 200,
+      connectionsFound: 0
+    });
+
+    try {
+      // HYBRID RETRIEVAL STRATEGY for better coverage
+      const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }>();
+
+      // 1. SEMANTIC SEARCH: Find nodes with similar embeddings (lower threshold for broader match)
+      if (embedding && embedding.length > 0) {
+        const semanticResults = await semanticSearchNodesExtended(embedding, 0.15, 150);
+        semanticResults.forEach(n => {
+          nodeMap.set(n.id, {
+            id: n.id,
+            label: n.label,
+            entity_type: n.entity_type,
+            description: n.description,
+            similarity_score: n.similarity
+          });
+        });
+        console.log(`[Anchor Scan] Semantic search found ${semanticResults.length} nodes (threshold: 0.15)`);
+      }
+
+      // 2. KEYWORD SEARCH: Extract keywords from anchor name/description and search
+      const anchorText = `${anchor.label} ${anchor.description || ''}`;
+      const keywords = anchorText
+        .toLowerCase()
+        .split(/[\s,.\-_:;()]+/)
+        .filter(word => word.length > 3)
+        .filter(word => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been'].includes(word));
+
+      if (keywords.length > 0) {
+        const keywordResults = await fetchRelevantNodes(keywords.slice(0, 10)); // Top 10 keywords
+        keywordResults.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.5 // Assign moderate similarity for keyword matches
+            });
+          }
+        });
+        console.log(`[Anchor Scan] Keyword search (${keywords.slice(0, 5).join(', ')}...) found ${keywordResults.length} additional nodes`);
+      }
+
+      // 3. RECENT NODES: Add recent nodes as fallback/supplement
+      if (nodeMap.size < 50) {
+        const recentNodes = await fetchExistingNodes();
+        recentNodes.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.3 // Lower similarity for recent-only matches
+            });
+          }
+        });
+        console.log(`[Anchor Scan] Added ${recentNodes.length} recent nodes as supplement`);
+      }
+
+      // Convert map to array, sorted by similarity
+      let nodesToAnalyze = Array.from(nodeMap.values())
+        .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
+        .slice(0, 200); // Cap at 200 nodes for performance
+
+      console.log(`[Anchor Scan] Total unique nodes to analyze: ${nodesToAnalyze.length}`);
+
+      if (nodesToAnalyze.length === 0) {
+        // No nodes to scan - skip to deep mining
+        setIsScanning(false);
+        setScanProgress(null);
+        await performDeepMining(anchor, userId);
+        if (onGraphUpdate) onGraphUpdate();
+        setStep('done');
+        setIsSavingAnchor(false);
+        pendingAnchorRef.current = null;
+        return;
+      }
+
+      // Update progress for AI analysis phase
+      setAnchorStatusMessage('Analyzing connections with AI...');
+      setScanProgress({
+        phase: 'ai_analysis',
+        totalBatches: 1,
+        currentBatch: 1,
+        nodesProcessed: 0,
+        totalNodes: nodesToAnalyze.length,
+        connectionsFound: 0
+      });
+
+      // Find connections using enhanced AI (includes confidence scoring)
+      const connections = await connectAnchorToKnowledgeEnhanced(
+        { label: anchor.label, type: anchor.entity_type, description: anchor.description },
+        nodesToAnalyze
+      );
+
+      // connections are already in ConnectionCandidate format with real confidence scores
+      console.log(`Enhanced AI found ${connections.length} high-confidence connections`);
+
+      // Show review modal with results (even if empty, so user knows scan completed)
+      setPendingConnections(connections);
+      setShowReviewModal(true);
+      setIsScanning(false);
+      setScanProgress(null);
+      setAnchorStatusMessage('');
+
+    } catch (err: any) {
+      setSaveError(err.message || "Scan failed");
+      setIsScanning(false);
+      setScanProgress(null);
+      setAnchorStatusMessage('');
+      setIsSavingAnchor(false);
+    }
+  };
+
+  // Handle user confirming selected connections
+  const handleConfirmConnections = async (selectedConnections: ConnectionCandidate[]) => {
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) return;
+
+    setShowReviewModal(false);
+    setIsSavingAnchor(true);
+
+    try {
+      const supabase = getSupabase();
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      if (selectedConnections.length > 0) {
+        setAnchorStatusMessage(`Saving ${selectedConnections.length} connections...`);
+
+        const edgesToInsert = selectedConnections.map(c => ({
+          source_node_id: anchor.id,
+          target_node_id: c.target_node_id,
+          relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
+          evidence: c.evidence,
+          weight: c.confidence,
+          user_id: userId,
+        }));
+
+        await supabase.from('knowledge_edges').insert(edgesToInsert);
+        setAnchorStatusMessage(`Linked ${selectedConnections.length} nodes.`);
+      }
+
+      // Continue with deep mining
+      await performDeepMining(anchor, userId);
+
+      if (onGraphUpdate) onGraphUpdate();
+      setStep('done');
+
+    } catch (err: any) {
+      setSaveError(err.message || "Failed to save connections");
+      setAnchorStatusMessage('');
+    } finally {
+      setIsSavingAnchor(false);
+      pendingAnchorRef.current = null;
+      setPendingConnections([]);
+    }
+  };
+
+  // Cancel review modal - still complete anchor but skip connections
+  const handleCancelReview = async () => {
+    const anchor = pendingAnchorRef.current;
+    setShowReviewModal(false);
+    setPendingConnections([]);
+    setScanProgress(null);
+
+    if (anchor) {
+      try {
+        const userId = await getCurrentUserId();
+        if (userId) {
+          // Continue with deep mining even if user skips connections
+          await performDeepMining(anchor, userId);
+        }
+        if (onGraphUpdate) onGraphUpdate();
+        setStep('done');
+      } catch (err) {
+        console.error('Deep mining failed:', err);
+        setStep('done');
+      }
+    }
+
+    pendingAnchorRef.current = null;
+    setIsSavingAnchor(false);
+  };
+
+  // Deep Mining helper - searches raw sources for anchor-related content
+  const performDeepMining = async (anchor: any, userId: string) => {
+    setAnchorStatusMessage('Deep mining raw sources...');
+    const supabase = getSupabase();
+
+    const relevantSources = await searchKnowledgeSources(anchor.label);
+
+    if (relevantSources.length > 0) {
+      setAnchorStatusMessage(`Mining ${relevantSources.length} raw docs...`);
+      let minedCount = 0;
+
+      for (const source of relevantSources) {
+        const miningResult = await mineContextFromRawText(
+          { label: anchor.label, type: anchor.entity_type, description: anchor.description },
+          source
+        );
+
+        if (miningResult.nodes.length > 0) {
+          const { data: insertedMinedNodes } = await supabase
+            .from('knowledge_nodes')
+            .insert(miningResult.nodes.map(n => ({
+              label: n.label,
+              entity_type: n.type,
+              description: n.description,
+              confidence: n.confidence || 0.8,
+              source: source.title || 'Retroactive Mining',
+              source_type: 'Inferred',
+              source_id: source.id,
+              quote: n.quote,
+              user_id: userId,
+            })))
+            .select('id, label');
+
+          if (insertedMinedNodes) {
+            const minedEdges = miningResult.edges.map(e => {
+              const targetNode = insertedMinedNodes.find(n => n.label === e.target_label);
+              if (targetNode) {
+                return {
+                  source_node_id: anchor.id,
+                  target_node_id: targetNode.id,
+                  relation_type: e.relation.toLowerCase().replace(/\s+/g, '_'),
+                  evidence: e.evidence,
+                  weight: 1,
+                  user_id: userId,
+                };
+              }
+              return null;
+            }).filter(e => e !== null);
+
+            if (minedEdges.length > 0) {
+              await supabase.from('knowledge_edges').insert(minedEdges);
+              minedCount += minedEdges.length;
+            }
+          }
+        }
+      }
+      setAnchorStatusMessage(`Deep mining complete. Added ${minedCount} new insights.`);
     }
   };
 
@@ -944,6 +1127,19 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                         </div>
                     </div>
                 </div>
+             )}
+
+             {/* Anchor Scan Review Modal - shows after automatic scan completes */}
+             {showReviewModal && (
+                <AnchorScanReviewModal
+                  anchorName={anchorName}
+                  anchorType={anchorType}
+                  connections={pendingConnections}
+                  scanProgress={scanProgress}
+                  isScanning={isScanning}
+                  onConfirm={handleConfirmConnections}
+                  onCancel={handleCancelReview}
+                />
              )}
 
              {sourceType !== 'Research' && sourceType !== 'Anchor' && (

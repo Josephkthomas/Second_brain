@@ -449,6 +449,65 @@ export const semanticSearchNodes = async (embedding: number[], matchThreshold: n
   return data || [];
 };
 
+// --- COMPREHENSIVE ANCHOR SCAN FUNCTIONS ---
+
+/**
+ * Count all non-anchor nodes in the database
+ * Used to determine whether to show quick/comprehensive scan choice
+ */
+export const countAllNodes = async (): Promise<number> => {
+  const client = getSupabase();
+
+  const { count, error } = await client
+    .from('knowledge_nodes')
+    .select('*', { count: 'exact', head: true })
+    .or('is_anchor.is.null,is_anchor.eq.false');
+
+  if (error) {
+    console.error("Failed to count nodes:", error);
+    return 0;
+  }
+  return count || 0;
+};
+
+/**
+ * Extended semantic search for comprehensive anchor scanning
+ * Returns up to 500 nodes with their similarity scores
+ */
+export const semanticSearchNodesExtended = async (
+  embedding: number[],
+  matchThreshold: number = 0.4,
+  matchCount: number = 500
+): Promise<{
+  id: string;
+  label: string;
+  entity_type: string;
+  description?: string;
+  similarity: number;
+}[]> => {
+  const client = getSupabase();
+
+  if (!embedding || embedding.length === 0) {
+    console.warn("semanticSearchNodesExtended called with empty embedding");
+    return [];
+  }
+
+  // Use the existing match_nodes RPC function with higher limit
+  const { data, error } = await client.rpc('match_nodes', {
+    query_embedding: embedding,
+    match_threshold: matchThreshold,
+    match_count: matchCount,
+  });
+
+  if (error) {
+    console.error("Extended semantic search failed:", error.message);
+    return [];
+  }
+
+  console.log(`Extended semantic search returned ${data?.length || 0} results (threshold: ${matchThreshold})`);
+  return data || [];
+};
+
 // --- USER PROFILE MANAGEMENT ---
 
 export interface UserProfile {

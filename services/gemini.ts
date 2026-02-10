@@ -659,6 +659,285 @@ export const connectAnchorToKnowledge = async (
     } catch (e) { return []; }
 };
 
+/**
+ * Enhanced anchor-to-knowledge connection with semantic context
+ * Uses detailed prompting, confidence scoring, and relationship guidance
+ *
+ * @param anchor - The anchor node with full context
+ * @param nodes - Candidate nodes (ideally from semantic search, with similarity scores)
+ * @returns Array of ConnectionCandidate with confidence scores
+ */
+export const connectAnchorToKnowledgeEnhanced = async (
+  anchor: { label: string; type: string; description: string },
+  nodes: { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }[]
+): Promise<ConnectionCandidate[]> => {
+  if (nodes.length === 0) return [];
+
+  const ai = initGenAI();
+
+  const systemInstruction = `
+Role: Agent 3 – Retroactive Linker (Enhanced)
+
+You are analyzing potential connections between a NEW ANCHOR and EXISTING NODES in a knowledge graph.
+
+## Your Goal:
+Find ALL meaningful connections - be INCLUSIVE, not restrictive. The user will review and select which to keep.
+
+## Connection Types to Look For:
+1. **Direct**: The node IS an example, tool, person, or component of the anchor topic
+2. **Topical**: The node is about a related subject, field, or technology
+3. **Contextual**: The node provides context, background, or adjacent knowledge
+4. **Enabling**: The node enables, supports, or is used by the anchor topic
+5. **People/Orgs**: People or organizations associated with the anchor topic
+
+## Instructions:
+1. Cast a WIDE NET - include topically relevant connections even if not directly mentioned
+2. For tech/tool anchors: Include specific products, frameworks, companies in that space
+3. For concept anchors: Include related concepts, implementations, and practitioners
+4. Provide specific evidence explaining the connection
+5. Use relationship types from: ${COMMON_RELATIONS.join(', ')}
+6. Confidence scores:
+   - 0.9-1.0: Direct relationship (node IS about the anchor topic)
+   - 0.7-0.89: Strong topical relationship (same domain)
+   - 0.5-0.69: Related/contextual (adjacent topic)
+   - 0.4-0.49: Tangential but potentially useful
+
+## Return connections with confidence >= 0.4
+  `;
+
+  const nodesList = nodes.map(n =>
+    `[ID: ${n.id}] ${n.label} (${n.entity_type}): ${n.description || 'No description'}${n.similarity_score ? ` [Semantic Similarity: ${(n.similarity_score * 100).toFixed(1)}%]` : ''}`
+  ).join("\n");
+
+  const prompt = `
+ANCHOR TO CONNECT:
+Name: ${anchor.label}
+Type: ${anchor.type}
+Description: ${anchor.description}
+
+CANDIDATE NODES TO EVALUATE (${nodes.length} nodes):
+${nodesList}
+
+Find ALL relevant connections (confidence >= 0.4). Be inclusive - the user will review and select.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        temperature: 0.2,
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              target_node_id: { type: Type.STRING },
+              relation: { type: Type.STRING },
+              evidence: { type: Type.STRING },
+              confidence: { type: Type.NUMBER }
+            }
+          }
+        }
+      }
+    });
+
+    const connections = cleanAndParseJSON(response.text || '[]');
+
+    // Enrich with node metadata and filter by confidence (lowered to 0.4 for inclusivity)
+    const enrichedConnections: ConnectionCandidate[] = [];
+    for (const conn of connections) {
+      const node = nodes.find(n => n.id === conn.target_node_id);
+      if (node && conn.confidence >= 0.4) {
+        enrichedConnections.push({
+          target_node_id: conn.target_node_id,
+          target_label: node.label,
+          target_type: node.entity_type,
+          relation: conn.relation,
+          evidence: conn.evidence,
+          confidence: conn.confidence,
+          similarity_score: node.similarity_score
+        });
+      }
+    }
+
+    // Sort by confidence descending
+    return enrichedConnections.sort((a, b) => b.confidence - a.confidence);
+  } catch (error) {
+    console.error('Enhanced anchor connection failed:', error);
+    return [];
+  }
+};
+
+// --- COMPREHENSIVE ANCHOR SCAN TYPES AND FUNCTION ---
+
+/**
+ * A potential connection candidate discovered during comprehensive scan
+ */
+export interface ConnectionCandidate {
+  target_node_id: string;
+  target_label: string;
+  target_type: string;
+  relation: string;
+  evidence: string;
+  confidence: number;
+  similarity_score?: number;
+}
+
+/**
+ * Progress tracking for batched anchor scanning
+ */
+export interface BatchScanProgress {
+  phase: 'semantic_search' | 'ai_analysis' | 'complete';
+  totalBatches: number;
+  currentBatch: number;
+  nodesProcessed: number;
+  totalNodes: number;
+  connectionsFound: number;
+  currentBatchLabel?: string;
+}
+
+/**
+ * Comprehensive anchor-to-knowledge connection analysis
+ * Processes nodes in batches with AI-powered relationship discovery
+ *
+ * @param anchor - The new anchor to find connections for
+ * @param nodes - Candidate nodes to analyze (pre-filtered by semantic similarity)
+ * @param batchSize - Number of nodes per AI analysis batch (default 40)
+ * @param onProgress - Progress callback for UI updates
+ * @returns Array of connection candidates sorted by confidence
+ */
+export const connectAnchorToKnowledgeBatch = async (
+  anchor: { label: string; type: string; description: string },
+  nodes: { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }[],
+  batchSize: number = 40,
+  onProgress?: (progress: BatchScanProgress) => void
+): Promise<ConnectionCandidate[]> => {
+  if (nodes.length === 0) return [];
+
+  const ai = initGenAI();
+  const allConnections: ConnectionCandidate[] = [];
+  const batches = Math.ceil(nodes.length / batchSize);
+
+  for (let i = 0; i < batches; i++) {
+    const batchNodes = nodes.slice(i * batchSize, (i + 1) * batchSize);
+
+    // Report progress
+    onProgress?.({
+      phase: 'ai_analysis',
+      totalBatches: batches,
+      currentBatch: i + 1,
+      nodesProcessed: i * batchSize,
+      totalNodes: nodes.length,
+      connectionsFound: allConnections.length,
+      currentBatchLabel: batchNodes[0]?.label
+    });
+
+    const systemInstruction = `
+Role: Agent 3 – Retroactive Linker (Enhanced)
+
+You are analyzing potential connections between a NEW ANCHOR and EXISTING NODES in a knowledge graph.
+
+## Instructions:
+1. Evaluate each candidate node for meaningful relationships to the anchor
+2. Only include HIGH CONFIDENCE connections (clear semantic or logical relationship)
+3. Provide specific evidence explaining WHY they're connected
+4. Use relationship types from: ${COMMON_RELATIONS.join(', ')}
+5. Assign a confidence score (0.0-1.0) based on relationship strength:
+   - 0.9-1.0: Direct, explicit relationship
+   - 0.7-0.89: Strong implied relationship
+   - 0.6-0.69: Moderate, contextual relationship
+
+## Be SELECTIVE:
+- Quality over quantity
+- Skip weak or tenuous connections
+- Only return connections with confidence >= 0.6
+    `;
+
+    const nodesList = batchNodes.map(n =>
+      `[ID: ${n.id}] ${n.label} (${n.entity_type}): ${n.description || 'No description'}${n.similarity_score ? ` [Semantic Similarity: ${(n.similarity_score * 100).toFixed(1)}%]` : ''}`
+    ).join("\n");
+
+    const prompt = `
+ANCHOR TO CONNECT:
+Name: ${anchor.label}
+Type: ${anchor.type}
+Description: ${anchor.description}
+
+CANDIDATE NODES TO EVALUATE (${batchNodes.length} nodes):
+${nodesList}
+
+Analyze and return connections with confidence >= 0.6
+    `;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          temperature: 0.2,
+          systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                target_node_id: { type: Type.STRING },
+                relation: { type: Type.STRING },
+                evidence: { type: Type.STRING },
+                confidence: { type: Type.NUMBER }
+              }
+            }
+          }
+        }
+      });
+
+      const batchConnections = cleanAndParseJSON(response.text || '[]');
+
+      // Enrich with node metadata
+      for (const conn of batchConnections) {
+        const node = batchNodes.find(n => n.id === conn.target_node_id);
+        if (node && conn.confidence >= 0.6) {
+          allConnections.push({
+            target_node_id: conn.target_node_id,
+            target_label: node.label,
+            target_type: node.entity_type,
+            relation: conn.relation,
+            evidence: conn.evidence,
+            confidence: conn.confidence,
+            similarity_score: node.similarity_score
+          });
+        }
+      }
+
+      // Rate limit protection: 1 second delay between batches
+      if (i < batches - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+    } catch (error) {
+      console.error(`Batch ${i + 1} failed:`, error);
+      // Continue with next batch
+    }
+  }
+
+  // Final progress update
+  onProgress?.({
+    phase: 'complete',
+    totalBatches: batches,
+    currentBatch: batches,
+    nodesProcessed: nodes.length,
+    totalNodes: nodes.length,
+    connectionsFound: allConnections.length
+  });
+
+  // Sort by confidence descending
+  return allConnections.sort((a, b) => b.confidence - a.confidence);
+};
+
 export const mineContextFromRawText = async (
   anchor: { label: string; type: string; description: string },
   source: { id: string; title: string; content: string }
