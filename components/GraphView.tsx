@@ -11,8 +11,9 @@ import {
   Search, Move, Sparkles, Hand, Cable, ChevronRight, Layers, Copy, Pin, CheckSquare, Square,
   Keyboard, Command, CornerDownLeft, Filter, User, Bot
 } from 'lucide-react';
-import { fetchTableData, deleteRows, insertRows, mergeNodes } from '../services/supabase';
-import { generateCrossConnections, suggestRelationship } from '../services/gemini';
+import { fetchTableData, deleteRows, insertRows, mergeNodes, countAllNodes, semanticSearchNodesExtended, fetchExistingNodes, getCurrentUserId, getSupabase } from '../services/supabase';
+import { generateCrossConnections, suggestRelationship, generateEmbedding, connectAnchorToKnowledge, connectAnchorToKnowledgeBatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
+import AnchorScanReviewModal from './AnchorScanReviewModal';
 import { promoteToAnchor, demoteFromAnchor } from '../services/anchorService';
 import { GraphConfig, GraphNode, GraphLink, LensType } from '../types';
 import { LENS_CONFIG } from '../constants';
@@ -785,6 +786,15 @@ export const GraphView: React.FC<GraphViewProps> = ({
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
 
+  // Anchor Rescan State
+  const [showRescanChoice, setShowRescanChoice] = useState(false);
+  const [rescanAnchor, setRescanAnchor] = useState<GraphNode | null>(null);
+  const [isRescanScanning, setIsRescanScanning] = useState(false);
+  const [rescanProgress, setRescanProgress] = useState<BatchScanProgress | null>(null);
+  const [rescanConnections, setRescanConnections] = useState<ConnectionCandidate[]>([]);
+  const [showRescanReviewModal, setShowRescanReviewModal] = useState(false);
+  const [totalNodeCount, setTotalNodeCount] = useState<number>(0);
+
   // Omnibar State
   const [omnibarOpen, setOmnibarOpen] = useState(false);
   const [omnibarQuery, setOmnibarQuery] = useState('');
@@ -1133,6 +1143,166 @@ export const GraphView: React.FC<GraphViewProps> = ({
       }
     }
     setContextMenu(null);
+  };
+
+  // --- ANCHOR RESCAN HANDLERS ---
+
+  const handleStartRescan = async (node: GraphNode) => {
+    // Get node count to show scan choice
+    const nodeCount = await countAllNodes();
+    setTotalNodeCount(nodeCount);
+    setRescanAnchor(node);
+    setShowRescanChoice(true);
+  };
+
+  const performQuickRescan = async () => {
+    if (!rescanAnchor) return;
+    setShowRescanChoice(false);
+    setIsRescanScanning(true);
+
+    try {
+      const supabase = getSupabase();
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      // Fetch 100 most recent nodes
+      const existingNodes = await fetchExistingNodes();
+      if (existingNodes.length === 0) {
+        setIsRescanScanning(false);
+        return;
+      }
+
+      // Find connections
+      const connections = await connectAnchorToKnowledge(
+        { label: rescanAnchor.label, type: rescanAnchor.type, description: rescanAnchor.data.description || '' },
+        existingNodes
+      );
+
+      if (connections.length > 0) {
+        const edgesToInsert = connections.map(c => ({
+          source_node_id: rescanAnchor.id,
+          target_node_id: c.target_node_id,
+          relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
+          evidence: c.evidence,
+          weight: 1,
+          user_id: userId,
+        }));
+
+        await supabase.from('knowledge_edges').insert(edgesToInsert);
+      }
+
+      // Refresh graph
+      loadGraphData();
+      setSelectedNode(null);
+    } catch (err) {
+      console.error('Quick rescan failed:', err);
+    } finally {
+      setIsRescanScanning(false);
+      setRescanAnchor(null);
+    }
+  };
+
+  const performComprehensiveRescan = async () => {
+    if (!rescanAnchor) return;
+    setShowRescanChoice(false);
+    setIsRescanScanning(true);
+
+    try {
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      // Generate embedding for the anchor
+      setRescanProgress({
+        phase: 'semantic_search',
+        totalBatches: 0,
+        currentBatch: 0,
+        nodesProcessed: 0,
+        totalNodes: totalNodeCount,
+        connectionsFound: 0
+      });
+
+      const embedding = await generateEmbedding(`${rescanAnchor.label}: ${rescanAnchor.data.description || ''}`);
+
+      if (embedding.length === 0) {
+        // Fallback to quick scan if embedding fails
+        await performQuickRescan();
+        return;
+      }
+
+      // Semantic search for similar nodes
+      const semanticResults = await semanticSearchNodesExtended(embedding, 0.4, 500);
+
+      if (semanticResults.length === 0) {
+        await performQuickRescan();
+        return;
+      }
+
+      // Batched AI analysis
+      const connections = await connectAnchorToKnowledgeBatch(
+        { label: rescanAnchor.label, type: rescanAnchor.type, description: rescanAnchor.data.description || '' },
+        semanticResults.map(r => ({
+          id: r.id,
+          label: r.label,
+          entity_type: r.entity_type,
+          description: r.description,
+          similarity_score: r.similarity
+        })),
+        40,
+        (progress) => setRescanProgress(progress)
+      );
+
+      // Show review modal
+      setRescanConnections(connections);
+      setShowRescanReviewModal(true);
+      setIsRescanScanning(false);
+
+    } catch (err) {
+      console.error('Comprehensive rescan failed:', err);
+      setIsRescanScanning(false);
+    }
+  };
+
+  const handleConfirmRescanConnections = async (selectedConnections: ConnectionCandidate[]) => {
+    if (!rescanAnchor) return;
+    setShowRescanReviewModal(false);
+
+    try {
+      const supabase = getSupabase();
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      if (selectedConnections.length > 0) {
+        const edgesToInsert = selectedConnections.map(c => ({
+          source_node_id: rescanAnchor.id,
+          target_node_id: c.target_node_id,
+          relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
+          evidence: c.evidence,
+          weight: c.confidence,
+          user_id: userId,
+        }));
+
+        await supabase.from('knowledge_edges').insert(edgesToInsert);
+      }
+
+      // Refresh graph
+      loadGraphData();
+      setSelectedNode(null);
+    } catch (err) {
+      console.error('Failed to save rescan connections:', err);
+    } finally {
+      setRescanAnchor(null);
+      setRescanConnections([]);
+      setRescanProgress(null);
+    }
+  };
+
+  const handleCancelRescan = () => {
+    setShowRescanChoice(false);
+    setShowRescanReviewModal(false);
+    setRescanAnchor(null);
+    setRescanConnections([]);
+    setRescanProgress(null);
+    setIsRescanScanning(false);
   };
 
   const { visibilityMap, depthMap } = useMemo(() => {
@@ -2691,7 +2861,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                             </div>
                             
                             {activeLens !== 'AnchorFocus' && (
-                                <button 
+                                <button
                                     onClick={() => enterAnchorMode(selectedNode.id)}
                                     className="flex items-center justify-center gap-2 w-full py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-400 rounded-lg text-xs font-bold uppercase tracking-wider transition-all mb-2"
                                 >
@@ -2703,6 +2873,19 @@ export const GraphView: React.FC<GraphViewProps> = ({
                                     Currently Inspecting Gravitational Field
                                 </div>
                             )}
+
+                            {/* Scan for Connections Button */}
+                            <button
+                                onClick={() => handleStartRescan(selectedNode)}
+                                disabled={isRescanScanning}
+                                className="flex items-center justify-center gap-2 w-full py-2 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/50 text-cyan-400 rounded-lg text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                            >
+                                {isRescanScanning ? (
+                                    <><Loader2 size={14} className="animate-spin" /> Scanning...</>
+                                ) : (
+                                    <><Search size={14} /> Scan for Connections</>
+                                )}
+                            </button>
                         </div>
                      )
                   })() : (
@@ -2854,6 +3037,89 @@ export const GraphView: React.FC<GraphViewProps> = ({
         <div
           className="fixed inset-0 z-[9998]"
           onClick={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Rescan Scan Choice Modal */}
+      {showRescanChoice && rescanAnchor && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-lg shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 bg-cyan-900/20 rounded-lg text-cyan-500 border border-cyan-900/50">
+                <Search size={24} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Scan for Connections</h3>
+                <p className="text-sm text-slate-400">
+                  Find connections for "{rescanAnchor.label}"
+                </p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-400 mb-4">
+              Your database has <span className="text-cyan-400 font-bold">{totalNodeCount.toLocaleString()}</span> nodes to analyze.
+            </p>
+
+            <div className="space-y-4 mb-6">
+              <button
+                onClick={performQuickRescan}
+                className="w-full p-4 bg-slate-950 border border-slate-700 hover:border-slate-600 rounded-lg text-left transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-white group-hover:text-cyan-400">
+                      Quick Scan
+                    </div>
+                    <div className="text-sm text-slate-400">
+                      Scans 100 most recent nodes. Fast (~5 seconds)
+                    </div>
+                  </div>
+                  <Zap size={24} className="text-cyan-500" />
+                </div>
+              </button>
+
+              <button
+                onClick={performComprehensiveRescan}
+                className="w-full p-4 bg-cyan-950/20 border border-cyan-900/50 hover:border-cyan-500/50 rounded-lg text-left transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-cyan-400 group-hover:text-cyan-300">
+                      Comprehensive Scan
+                    </div>
+                    <div className="text-sm text-slate-400">
+                      Semantic search + AI analysis of up to 500 nodes.
+                      <br />
+                      Thorough (~{Math.max(1, Math.ceil(Math.min(totalNodeCount, 500) / 40))} min)
+                    </div>
+                  </div>
+                  <Search size={24} className="text-cyan-500" />
+                </div>
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={handleCancelRescan}
+                className="px-4 py-2 text-slate-400 hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rescan Review Modal */}
+      {showRescanReviewModal && rescanAnchor && (
+        <AnchorScanReviewModal
+          anchorName={rescanAnchor.label}
+          anchorType={rescanAnchor.type}
+          connections={rescanConnections}
+          scanProgress={rescanProgress}
+          isScanning={isRescanScanning}
+          onConfirm={handleConfirmRescanConnections}
+          onCancel={handleCancelRescan}
         />
       )}
     </div>
