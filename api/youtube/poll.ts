@@ -11,17 +11,20 @@ const CRON_SECRET = process.env.CRON_SECRET; // Optional: for securing cron endp
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Minimum video duration in seconds (skip YouTube Shorts)
-const MIN_VIDEO_DURATION = 60;
+// Default video duration settings (fallback if channel doesn't have settings)
+const DEFAULT_MIN_DURATION = 90;  // 1.5 minutes (skip Shorts)
+const DEFAULT_MAX_DURATION = null;  // Unlimited
 
-// Fetch video duration in seconds from YouTube
+// Fetch video duration in seconds from YouTube using multiple strategies
 async function getVideoDuration(videoId: string): Promise<number | null> {
   try {
     const response = await fetch(
       `https://www.youtube.com/watch?v=${videoId}`,
       {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
         },
       }
     );
@@ -30,21 +33,37 @@ async function getVideoDuration(videoId: string): Promise<number | null> {
 
     const html = await response.text();
 
-    // Extract duration from ytInitialPlayerResponse
-    const durationMatch = html.match(/"lengthSeconds":"(\d+)"/) ||
-                          html.match(/"approxDurationMs":"(\d+)"/);
+    // Try multiple patterns that YouTube uses
+    const patterns = [
+      /"lengthSeconds":"(\d+)"/,
+      /"lengthSeconds":\s*"(\d+)"/,
+      /lengthSeconds\\?":\\?"(\d+)\\?"/,
+      /"approxDurationMs":"(\d+)"/,
+      /approxDurationMs\\?":\\?"(\d+)\\?"/,
+      /"duration":"PT(\d+)M(\d+)S"/,
+      /"duration":"PT(\d+)S"/,
+      /itemprop="duration" content="PT(\d+)M(\d+)S"/,
+      /itemprop="duration" content="PT(\d+)S"/,
+    ];
 
-    if (durationMatch) {
-      if (durationMatch[0].includes('lengthSeconds')) {
-        return parseInt(durationMatch[1], 10);
-      } else if (durationMatch[0].includes('approxDurationMs')) {
-        return Math.floor(parseInt(durationMatch[1], 10) / 1000);
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        if (pattern.source.includes('PT') && match[2]) {
+          return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+        } else if (pattern.source.includes('PT')) {
+          return parseInt(match[1], 10);
+        } else if (pattern.source.includes('approxDurationMs')) {
+          return Math.floor(parseInt(match[1], 10) / 1000);
+        } else {
+          return parseInt(match[1], 10);
+        }
       }
     }
 
     return null;
   } catch (error) {
-    console.error(`Error fetching duration for ${videoId}:`, error);
+    console.error(`[Poll] Error fetching duration for ${videoId}:`, error);
     return null;
   }
 }
@@ -162,10 +181,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     console.log('[Poll] Starting YouTube channel poll...');
 
-    // Fetch all active channels
+    // Fetch all active channels with their duration settings
     const { data: channels, error: channelsError } = await supabase
       .from('youtube_channels')
-      .select('id, user_id, channel_id, channel_name, last_checked_at, auto_ingest')
+      .select('id, user_id, channel_id, channel_name, last_checked_at, auto_ingest, min_video_duration, max_video_duration')
       .eq('is_active', true)
       .eq('auto_ingest', true);
 
@@ -189,7 +208,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Process each channel
     for (const channel of channels) {
       try {
-        console.log(`[Poll] Polling: ${channel.channel_name}`);
+        // Get channel-specific duration settings
+        const minDuration = channel.min_video_duration ?? DEFAULT_MIN_DURATION;
+        const maxDuration = channel.max_video_duration ?? DEFAULT_MAX_DURATION;
+
+        console.log(`[Poll] Polling: ${channel.channel_name} (min: ${minDuration}s, max: ${maxDuration || 'unlimited'})`);
 
         // Fetch videos from RSS
         const videos = await fetchChannelVideosFromRSS(channel.channel_id);
@@ -223,23 +246,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             })
           );
 
-          // Filter out Shorts (< 60 seconds), but keep videos with unknown duration
-          const longFormVideos = videosWithDuration.filter(v => {
-            if (v.duration_seconds !== null && v.duration_seconds < MIN_VIDEO_DURATION) {
-              console.log(`[Poll] Skipping Short: "${v.title}" (${v.duration_seconds}s)`);
+          // Filter by channel-specific duration settings
+          // IMPORTANT: Exclude videos with unknown duration since we can't verify they meet criteria
+          const filteredVideos = videosWithDuration.filter(v => {
+            // If we couldn't get duration, EXCLUDE the video
+            if (v.duration_seconds === null) {
+              console.log(`[Poll] Excluding "${v.title}" - unknown duration`);
               return false;
             }
+
+            // Check minimum duration
+            if (v.duration_seconds < minDuration) {
+              console.log(`[Poll] Excluding "${v.title}" - too short (${v.duration_seconds}s < ${minDuration}s)`);
+              return false;
+            }
+
+            // Check maximum duration (if set)
+            if (maxDuration !== null && v.duration_seconds > maxDuration) {
+              console.log(`[Poll] Excluding "${v.title}" - too long (${v.duration_seconds}s > ${maxDuration}s)`);
+              return false;
+            }
+
             return true;
           });
 
-          if (longFormVideos.length === 0) {
-            console.log(`[Poll] All new videos were Shorts for ${channel.channel_name}`);
+          if (filteredVideos.length === 0) {
+            console.log(`[Poll] No videos passed duration filter for ${channel.channel_name}`);
           } else {
-            console.log(`[Poll] ${longFormVideos.length}/${newVideos.length} videos are long-form`);
+            console.log(`[Poll] ${filteredVideos.length}/${newVideos.length} videos passed duration filter`);
           }
 
-          // Update newVideos to only include long-form
-          newVideos = longFormVideos;
+          // Update newVideos to only include filtered
+          newVideos = filteredVideos;
 
           // Add new videos to queue (only if there are any after filtering)
           if (newVideos.length > 0) {

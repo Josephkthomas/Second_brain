@@ -16,14 +16,16 @@ const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const DEFAULT_MIN_DURATION = 90;  // 1.5 minutes (skip Shorts)
 const DEFAULT_MAX_DURATION = null;  // Unlimited
 
-// Fetch video duration in seconds from YouTube
+// Fetch video duration in seconds from YouTube using multiple strategies
 async function getVideoDuration(videoId: string): Promise<number | null> {
   try {
     const response = await fetch(
       `https://www.youtube.com/watch?v=${videoId}`,
       {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
         },
       }
     );
@@ -32,15 +34,31 @@ async function getVideoDuration(videoId: string): Promise<number | null> {
 
     const html = await response.text();
 
-    // Extract duration from ytInitialPlayerResponse
-    const durationMatch = html.match(/"lengthSeconds":"(\d+)"/) ||
-                          html.match(/"approxDurationMs":"(\d+)"/);
+    // Try multiple patterns that YouTube uses
+    const patterns = [
+      /"lengthSeconds":"(\d+)"/,
+      /"lengthSeconds":\s*"(\d+)"/,
+      /lengthSeconds\\?":\\?"(\d+)\\?"/,
+      /"approxDurationMs":"(\d+)"/,
+      /approxDurationMs\\?":\\?"(\d+)\\?"/,
+      /"duration":"PT(\d+)M(\d+)S"/,
+      /"duration":"PT(\d+)S"/,
+      /itemprop="duration" content="PT(\d+)M(\d+)S"/,
+      /itemprop="duration" content="PT(\d+)S"/,
+    ];
 
-    if (durationMatch) {
-      if (durationMatch[0].includes('lengthSeconds')) {
-        return parseInt(durationMatch[1], 10);
-      } else if (durationMatch[0].includes('approxDurationMs')) {
-        return Math.floor(parseInt(durationMatch[1], 10) / 1000);
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        if (pattern.source.includes('PT') && match[2]) {
+          return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+        } else if (pattern.source.includes('PT')) {
+          return parseInt(match[1], 10);
+        } else if (pattern.source.includes('approxDurationMs')) {
+          return Math.floor(parseInt(match[1], 10) / 1000);
+        } else {
+          return parseInt(match[1], 10);
+        }
       }
     }
 
@@ -305,19 +323,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           );
 
           // Filter by channel duration settings
+          // IMPORTANT: Exclude videos with unknown duration since we can't verify they meet criteria
           const filteredVideos = videosWithDuration.filter(v => {
-            // Keep videos with unknown duration (benefit of the doubt)
-            if (v.duration_seconds === null) return true;
+            // If we couldn't get duration, EXCLUDE the video
+            if (v.duration_seconds === null) {
+              console.log(`[channels] Excluding "${v.title}" - unknown duration`);
+              return false;
+            }
 
             // Check minimum duration
             if (v.duration_seconds < min_video_duration) {
-              console.log(`[channels] Skipping (too short): "${v.title}" (${v.duration_seconds}s < ${min_video_duration}s)`);
+              console.log(`[channels] Excluding (too short): "${v.title}" (${v.duration_seconds}s < ${min_video_duration}s)`);
               return false;
             }
 
             // Check maximum duration (if set)
             if (max_video_duration !== null && v.duration_seconds > max_video_duration) {
-              console.log(`[channels] Skipping (too long): "${v.title}" (${v.duration_seconds}s > ${max_video_duration}s)`);
+              console.log(`[channels] Excluding (too long): "${v.title}" (${v.duration_seconds}s > ${max_video_duration}s)`);
               return false;
             }
 

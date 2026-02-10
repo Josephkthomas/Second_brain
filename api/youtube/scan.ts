@@ -44,36 +44,72 @@ interface YouTubeVideoFromRSS {
   duration_seconds: number | null;
 }
 
-// Fetch video duration in seconds from YouTube
+// Fetch video duration in seconds from YouTube using multiple strategies
 async function getVideoDuration(videoId: string): Promise<number | null> {
   try {
+    // Strategy 1: Try the video page with various patterns
     const response = await fetch(
       `https://www.youtube.com/watch?v=${videoId}`,
       {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
         },
       }
     );
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.log(`[Duration] Failed to fetch page for ${videoId}: ${response.status}`);
+      return null;
+    }
 
     const html = await response.text();
 
-    const durationMatch = html.match(/"lengthSeconds":"(\d+)"/) ||
-                          html.match(/"approxDurationMs":"(\d+)"/);
+    // Try multiple patterns that YouTube uses
+    const patterns = [
+      /"lengthSeconds":"(\d+)"/,                    // Standard format
+      /"lengthSeconds":\s*"(\d+)"/,                 // With whitespace
+      /lengthSeconds\\?":\\?"(\d+)\\?"/,            // Escaped quotes
+      /"approxDurationMs":"(\d+)"/,                 // Duration in ms
+      /approxDurationMs\\?":\\?"(\d+)\\?"/,         // Escaped ms format
+      /"duration":"PT(\d+)M(\d+)S"/,                // ISO 8601 format (e.g., PT5M30S)
+      /"duration":"PT(\d+)S"/,                      // ISO 8601 short (e.g., PT30S)
+      /itemprop="duration" content="PT(\d+)M(\d+)S"/, // Schema.org format
+      /itemprop="duration" content="PT(\d+)S"/,    // Schema.org short
+    ];
 
-    if (durationMatch) {
-      if (durationMatch[0].includes('lengthSeconds')) {
-        return parseInt(durationMatch[1], 10);
-      } else if (durationMatch[0].includes('approxDurationMs')) {
-        return Math.floor(parseInt(durationMatch[1], 10) / 1000);
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        // Handle ISO 8601 duration (PTxMxS)
+        if (pattern.source.includes('PT') && match[2]) {
+          const minutes = parseInt(match[1], 10);
+          const seconds = parseInt(match[2], 10);
+          const duration = minutes * 60 + seconds;
+          console.log(`[Duration] Found duration for ${videoId}: ${duration}s (ISO format)`);
+          return duration;
+        } else if (pattern.source.includes('PT')) {
+          // Just seconds (PTxS)
+          const duration = parseInt(match[1], 10);
+          console.log(`[Duration] Found duration for ${videoId}: ${duration}s (ISO short)`);
+          return duration;
+        } else if (pattern.source.includes('approxDurationMs')) {
+          const duration = Math.floor(parseInt(match[1], 10) / 1000);
+          console.log(`[Duration] Found duration for ${videoId}: ${duration}s (ms format)`);
+          return duration;
+        } else {
+          const duration = parseInt(match[1], 10);
+          console.log(`[Duration] Found duration for ${videoId}: ${duration}s`);
+          return duration;
+        }
       }
     }
 
+    console.log(`[Duration] Could not find duration for ${videoId} in page`);
     return null;
   } catch (error) {
-    console.error(`Error fetching duration for ${videoId}:`, error);
+    console.error(`[Duration] Error fetching duration for ${videoId}:`, error);
     return null;
   }
 }
@@ -226,18 +262,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       // Filter videos by channel-specific duration settings
+      // IMPORTANT: Exclude videos with unknown duration since we can't verify they meet criteria
       const filteredVideos = videosWithDuration.filter(v => {
-        // If we couldn't get duration, include it (benefit of the doubt)
-        if (v.duration_seconds === null) return true;
+        // If we couldn't get duration, EXCLUDE the video (can't verify it meets criteria)
+        if (v.duration_seconds === null) {
+          console.log(`[Scan] Excluding "${v.title}" - unknown duration`);
+          return false;
+        }
 
         // Check minimum duration
-        if (v.duration_seconds < minDuration) return false;
+        if (v.duration_seconds < minDuration) {
+          console.log(`[Scan] Excluding "${v.title}" - too short (${v.duration_seconds}s < ${minDuration}s)`);
+          return false;
+        }
 
         // Check maximum duration (if set)
-        if (maxDuration !== null && v.duration_seconds > maxDuration) return false;
+        if (maxDuration !== null && v.duration_seconds > maxDuration) {
+          console.log(`[Scan] Excluding "${v.title}" - too long (${v.duration_seconds}s > ${maxDuration}s)`);
+          return false;
+        }
 
         return true;
       }).slice(0, MAX_VIDEOS_TO_RETURN);  // Limit to top 15 matching videos
+
+      console.log(`[Scan] ${filteredVideos.length}/${videosWithDuration.length} videos passed duration filter`);
 
       // Get existing queue items for these videos
       const videoIds = filteredVideos.map(v => v.video_id);
