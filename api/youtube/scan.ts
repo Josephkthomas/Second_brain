@@ -238,6 +238,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ error: 'Channel not found' });
       }
 
+      // Validate that we have a valid YouTube channel ID (should start with UC)
+      if (!channel.channel_id || !channel.channel_id.startsWith('UC')) {
+        console.error('[Scan] Invalid YouTube channel_id stored:', channel.channel_id);
+        return res.status(200).json({
+          channel_name: channel.channel_name,
+          youtube_channel_id: channel.channel_id || null,
+          videos: [],
+          error: 'invalid_channel_id',
+          message: `This channel has an invalid YouTube ID stored: "${channel.channel_id || 'null'}". Please delete this channel and re-add it using the channel URL.`,
+        });
+      }
+
       // Try to get duration settings (columns may not exist yet)
       let minDuration = DEFAULT_MIN_DURATION;
       let maxDuration: number | null = DEFAULT_MAX_DURATION;
