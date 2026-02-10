@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Anchor, Plus, Trash2, Star, TrendingUp, Info, X, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Anchor, Plus, Trash2, Star, TrendingUp, Info, X, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { getAnchors, getAnchorStats, getAnchorConnectionInfo, createAnchor, demoteFromAnchor, updateAnchorStrength } from '../services/anchorService';
 import { AnchorNode, AnchorStats, AnchorConnectionInfo } from '../types';
 import clsx from 'clsx';
+import { generateEmbedding, connectAnchorToKnowledgeEnhanced, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
+import { getSupabase, getCurrentUserId, fetchExistingNodes, fetchRelevantNodes, semanticSearchNodesExtended } from '../services/supabase';
+import AnchorScanReviewModal from './AnchorScanReviewModal';
 
 interface AnchorManagerProps {
   isOpen: boolean;
@@ -68,6 +71,14 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
   const [newAnchorStrength, setNewAnchorStrength] = useState<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
 
+  // Auto-scan state (for finding connections after anchor creation)
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<BatchScanProgress | null>(null);
+  const [pendingConnections, setPendingConnections] = useState<ConnectionCandidate[]>([]);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [scanStatusMessage, setScanStatusMessage] = useState('');
+  const pendingAnchorRef = useRef<AnchorNode | null>(null);
+
   const loadAnchors = useCallback(async () => {
     try {
       setLoading(true);
@@ -96,6 +107,201 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
     }
   }, [isOpen, loadAnchors]);
 
+  // Automatic Scan - runs after anchor creation, shows review modal with results
+  // Uses HYBRID approach: semantic search + keyword search + recent nodes for comprehensive coverage
+  const performAutoScan = async (anchor: AnchorNode, embedding: number[]) => {
+    setIsScanning(true);
+    setScanStatusMessage('Searching database for related knowledge...');
+    setScanProgress({
+      phase: 'semantic_search',
+      totalBatches: 1,
+      currentBatch: 1,
+      nodesProcessed: 0,
+      totalNodes: 200,
+      connectionsFound: 0
+    });
+
+    try {
+      // HYBRID RETRIEVAL STRATEGY for better coverage
+      const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }>();
+
+      // 1. SEMANTIC SEARCH: Find nodes with similar embeddings (lower threshold for broader match)
+      if (embedding && embedding.length > 0) {
+        const semanticResults = await semanticSearchNodesExtended(embedding, 0.15, 150);
+        semanticResults.forEach(n => {
+          nodeMap.set(n.id, {
+            id: n.id,
+            label: n.label,
+            entity_type: n.entity_type,
+            description: n.description,
+            similarity_score: n.similarity
+          });
+        });
+        console.log(`[Anchor Scan - Manager] Semantic search found ${semanticResults.length} nodes (threshold: 0.15)`);
+      }
+
+      // 2. KEYWORD SEARCH: Extract keywords from anchor name/description and search
+      const anchorText = `${anchor.label} ${(anchor as any).description || ''}`;
+      const keywords = anchorText
+        .toLowerCase()
+        .split(/[\s,.\-_:;()]+/)
+        .filter(word => word.length > 3)
+        .filter(word => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been'].includes(word));
+
+      if (keywords.length > 0) {
+        const keywordResults = await fetchRelevantNodes(keywords.slice(0, 10));
+        keywordResults.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.5
+            });
+          }
+        });
+        console.log(`[Anchor Scan - Manager] Keyword search (${keywords.slice(0, 5).join(', ')}...) found ${keywordResults.length} additional nodes`);
+      }
+
+      // 3. RECENT NODES: Add recent nodes as fallback/supplement
+      if (nodeMap.size < 50) {
+        const recentNodes = await fetchExistingNodes();
+        recentNodes.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.3
+            });
+          }
+        });
+        console.log(`[Anchor Scan - Manager] Added ${recentNodes.length} recent nodes as supplement`);
+      }
+
+      // Convert map to array, sorted by similarity
+      let nodesToAnalyze = Array.from(nodeMap.values())
+        .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
+        .slice(0, 200);
+
+      console.log(`[Anchor Scan - Manager] Total unique nodes to analyze: ${nodesToAnalyze.length}`);
+
+      if (nodesToAnalyze.length === 0) {
+        // No nodes to scan - finish
+        setIsScanning(false);
+        setScanProgress(null);
+        setScanStatusMessage('');
+        setCreating(false);
+        await loadAnchors();
+        onAnchorUpdate?.();
+        pendingAnchorRef.current = null;
+        return;
+      }
+
+      // Update progress for AI analysis phase
+      setScanStatusMessage('Analyzing connections with AI...');
+      setScanProgress({
+        phase: 'ai_analysis',
+        totalBatches: 1,
+        currentBatch: 1,
+        nodesProcessed: 0,
+        totalNodes: nodesToAnalyze.length,
+        connectionsFound: 0
+      });
+
+      // Find connections using enhanced AI
+      const connections = await connectAnchorToKnowledgeEnhanced(
+        { label: anchor.label, type: (anchor as any).entity_type, description: (anchor as any).description },
+        nodesToAnalyze
+      );
+
+      console.log(`[Anchor Scan - Manager] Enhanced AI found ${connections.length} high-confidence connections`);
+
+      // Show review modal with results
+      setPendingConnections(connections);
+      setShowReviewModal(true);
+      setIsScanning(false);
+      setScanProgress(null);
+      setScanStatusMessage('');
+
+    } catch (err: any) {
+      setError(err.message || "Scan failed");
+      setIsScanning(false);
+      setScanProgress(null);
+      setScanStatusMessage('');
+      setCreating(false);
+    }
+  };
+
+  // Handle user confirming selected connections from review modal
+  const handleConfirmConnections = async (selectedConnections: ConnectionCandidate[]) => {
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) return;
+
+    setShowReviewModal(false);
+
+    try {
+      const supabase = getSupabase();
+      const userId = await getCurrentUserId();
+      if (!userId) throw new Error('Not authenticated');
+
+      if (selectedConnections.length > 0) {
+        setScanStatusMessage(`Saving ${selectedConnections.length} connections...`);
+
+        const edgesToInsert = selectedConnections.map(c => ({
+          source_node_id: anchor.id,
+          target_node_id: c.target_node_id,
+          relation_type: c.relation.toLowerCase().replace(/\s+/g, '_'),
+          evidence: c.evidence,
+          weight: c.confidence,
+          user_id: userId,
+        }));
+
+        await supabase.from('knowledge_edges').insert(edgesToInsert);
+        console.log(`[Anchor Scan - Manager] Saved ${selectedConnections.length} connections`);
+      }
+
+      // Reset form and reload
+      setNewAnchorLabel('');
+      setNewAnchorType('Topic');
+      setNewAnchorDescription('');
+      setNewAnchorStrength(undefined);
+
+      await loadAnchors();
+      onAnchorUpdate?.();
+
+    } catch (err: any) {
+      setError(err.message || "Failed to save connections");
+    } finally {
+      setCreating(false);
+      pendingAnchorRef.current = null;
+      setPendingConnections([]);
+      setScanStatusMessage('');
+    }
+  };
+
+  // Cancel review modal - still complete anchor but skip connections
+  const handleCancelReview = async () => {
+    setShowReviewModal(false);
+    setPendingConnections([]);
+    setScanProgress(null);
+    setScanStatusMessage('');
+
+    // Reset form and reload
+    setNewAnchorLabel('');
+    setNewAnchorType('Topic');
+    setNewAnchorDescription('');
+    setNewAnchorStrength(undefined);
+
+    await loadAnchors();
+    onAnchorUpdate?.();
+
+    setCreating(false);
+    pendingAnchorRef.current = null;
+  };
+
   const handleCreateAnchor = async () => {
     if (!newAnchorLabel.trim()) {
       setError('Anchor label is required');
@@ -105,8 +311,10 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
     try {
       setCreating(true);
       setError(null);
+      setScanStatusMessage('Creating anchor...');
 
-      const { error: createError } = await createAnchor(
+      // Step 1: Create the anchor
+      const { data: newAnchor, error: createError } = await createAnchor(
         newAnchorLabel.trim(),
         newAnchorType,
         newAnchorDescription.trim() || undefined,
@@ -114,22 +322,33 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
       );
 
       if (createError) throw createError;
+      if (!newAnchor) throw new Error('Failed to create anchor');
 
-      // Reset form
-      setNewAnchorLabel('');
-      setNewAnchorType('Topic');
-      setNewAnchorDescription('');
-      setNewAnchorStrength(undefined);
-      setShowCreateForm(false);
+      console.log('[Anchor Manager] Anchor created:', newAnchor.label);
 
-      // Reload anchors
-      await loadAnchors();
-      onAnchorUpdate?.();
+      // Step 2: Generate embedding for the anchor
+      setScanStatusMessage('Generating embedding...');
+      const embeddingText = `${newAnchor.label}: ${(newAnchor as any).description || ''}`;
+      const embedding = await generateEmbedding(embeddingText);
+
+      if (embedding.length > 0) {
+        // Update anchor with embedding
+        const supabase = getSupabase();
+        await supabase.from('knowledge_nodes').update({ embedding }).eq('id', newAnchor.id);
+        console.log('[Anchor Manager] Embedding saved for anchor');
+      }
+
+      // Step 3: Store anchor reference and trigger auto-scan
+      pendingAnchorRef.current = newAnchor;
+      await performAutoScan(newAnchor, embedding);
+
+      // Note: Form reset and loadAnchors will happen in handleConfirmConnections or handleCancelReview
+
     } catch (err) {
       setError('Failed to create anchor');
       console.error(err);
-    } finally {
       setCreating(false);
+      setScanStatusMessage('');
     }
   };
 
@@ -304,18 +523,18 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
 
                   <button
                     onClick={handleCreateAnchor}
-                    disabled={creating || !newAnchorLabel.trim()}
+                    disabled={creating || isScanning || !newAnchorLabel.trim()}
                     className={clsx(
                       "w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                      creating || !newAnchorLabel.trim()
+                      creating || isScanning || !newAnchorLabel.trim()
                         ? "bg-white/5 text-slate-500 cursor-not-allowed"
                         : "bg-cyber-cyan/20 hover:bg-cyber-cyan/30 border border-cyber-cyan/50 text-cyber-cyan"
                     )}
                   >
-                    {creating ? (
+                    {creating || isScanning ? (
                       <>
-                        <div className="w-4 h-4 border-2 border-cyber-cyan/30 border-t-cyber-cyan rounded-full animate-spin" />
-                        Creating...
+                        <Loader2 size={16} className="animate-spin" />
+                        {scanStatusMessage || 'Creating...'}
                       </>
                     ) : (
                       <>
@@ -426,6 +645,19 @@ export const AnchorManager: React.FC<AnchorManagerProps> = ({ isOpen, onClose, o
           )}
         </div>
       </div>
+
+      {/* Auto-Scan Review Modal */}
+      {showReviewModal && (
+        <AnchorScanReviewModal
+          anchorName={pendingAnchorRef.current?.label || newAnchorLabel}
+          anchorType={pendingAnchorRef.current ? (pendingAnchorRef.current as any).entity_type : newAnchorType}
+          connections={pendingConnections}
+          scanProgress={scanProgress}
+          isScanning={isScanning}
+          onConfirm={handleConfirmConnections}
+          onCancel={handleCancelReview}
+        />
+      )}
     </div>
   );
 };
