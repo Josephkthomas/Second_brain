@@ -337,12 +337,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           );
 
           // Filter by channel duration settings
-          // IMPORTANT: Exclude videos with unknown duration since we can't verify they meet criteria
+          // NOTE: If duration is unknown (YouTube blocking), INCLUDE the video to avoid blocking all content
           const filteredVideos = videosWithDuration.filter(v => {
-            // If we couldn't get duration, EXCLUDE the video
+            // If we couldn't get duration, INCLUDE the video (YouTube may be rate-limiting)
             if (v.duration_seconds === null) {
-              console.log(`[channels] Excluding "${v.title}" - unknown duration`);
-              return false;
+              console.log(`[channels] Including "${v.title}" - unknown duration (YouTube may be blocking)`);
+              return true;
             }
 
             // Check minimum duration
