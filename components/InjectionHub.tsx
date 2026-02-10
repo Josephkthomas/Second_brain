@@ -248,47 +248,85 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
   };
 
   // Automatic Scan - runs after anchor creation, shows review modal with results
-  // Uses semantic search to find relevant nodes (not just recent) + enhanced AI prompting
+  // Uses HYBRID approach: semantic search + keyword search + recent nodes for comprehensive coverage
   const performAutoScan = async (anchor: any, userId: string, embedding: number[]) => {
     setIsScanning(true);
-    setAnchorStatusMessage('Finding semantically similar nodes...');
+    setAnchorStatusMessage('Searching database for related knowledge...');
     setScanProgress({
       phase: 'semantic_search',
       totalBatches: 1,
       currentBatch: 1,
       nodesProcessed: 0,
-      totalNodes: 100,
+      totalNodes: 200,
       connectionsFound: 0
     });
 
     try {
-      // Use semantic search to find relevant nodes (not just recent)
-      let nodesToAnalyze: { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }[] = [];
+      // HYBRID RETRIEVAL STRATEGY for better coverage
+      const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description?: string; similarity_score?: number }>();
 
+      // 1. SEMANTIC SEARCH: Find nodes with similar embeddings (lower threshold for broader match)
       if (embedding && embedding.length > 0) {
-        // Primary: semantic search for similar nodes
-        const semanticResults = await semanticSearchNodesExtended(embedding, 0.3, 100);
-        nodesToAnalyze = semanticResults.map(n => ({
-          id: n.id,
-          label: n.label,
-          entity_type: n.entity_type,
-          description: n.description,
-          similarity_score: n.similarity
-        }));
-        console.log(`Semantic search found ${nodesToAnalyze.length} similar nodes`);
+        const semanticResults = await semanticSearchNodesExtended(embedding, 0.15, 150);
+        semanticResults.forEach(n => {
+          nodeMap.set(n.id, {
+            id: n.id,
+            label: n.label,
+            entity_type: n.entity_type,
+            description: n.description,
+            similarity_score: n.similarity
+          });
+        });
+        console.log(`[Anchor Scan] Semantic search found ${semanticResults.length} nodes (threshold: 0.15)`);
       }
 
-      // Fallback: if semantic search returns nothing, use recent nodes
-      if (nodesToAnalyze.length === 0) {
-        const recentNodes = await fetchExistingNodes();
-        nodesToAnalyze = recentNodes.map(n => ({
-          id: n.id,
-          label: n.label,
-          entity_type: n.entity_type,
-          description: n.description
-        }));
-        console.log(`Fallback to ${nodesToAnalyze.length} recent nodes`);
+      // 2. KEYWORD SEARCH: Extract keywords from anchor name/description and search
+      const anchorText = `${anchor.label} ${anchor.description || ''}`;
+      const keywords = anchorText
+        .toLowerCase()
+        .split(/[\s,.\-_:;()]+/)
+        .filter(word => word.length > 3)
+        .filter(word => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been'].includes(word));
+
+      if (keywords.length > 0) {
+        const keywordResults = await fetchRelevantNodes(keywords.slice(0, 10)); // Top 10 keywords
+        keywordResults.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.5 // Assign moderate similarity for keyword matches
+            });
+          }
+        });
+        console.log(`[Anchor Scan] Keyword search (${keywords.slice(0, 5).join(', ')}...) found ${keywordResults.length} additional nodes`);
       }
+
+      // 3. RECENT NODES: Add recent nodes as fallback/supplement
+      if (nodeMap.size < 50) {
+        const recentNodes = await fetchExistingNodes();
+        recentNodes.forEach(n => {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, {
+              id: n.id,
+              label: n.label,
+              entity_type: n.entity_type,
+              description: n.description,
+              similarity_score: 0.3 // Lower similarity for recent-only matches
+            });
+          }
+        });
+        console.log(`[Anchor Scan] Added ${recentNodes.length} recent nodes as supplement`);
+      }
+
+      // Convert map to array, sorted by similarity
+      let nodesToAnalyze = Array.from(nodeMap.values())
+        .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
+        .slice(0, 200); // Cap at 200 nodes for performance
+
+      console.log(`[Anchor Scan] Total unique nodes to analyze: ${nodesToAnalyze.length}`);
 
       if (nodesToAnalyze.length === 0) {
         // No nodes to scan - skip to deep mining

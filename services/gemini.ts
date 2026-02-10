@@ -680,20 +680,29 @@ Role: Agent 3 – Retroactive Linker (Enhanced)
 
 You are analyzing potential connections between a NEW ANCHOR and EXISTING NODES in a knowledge graph.
 
-## Instructions:
-1. Evaluate each candidate node for meaningful relationships to the anchor
-2. Only include HIGH CONFIDENCE connections (clear semantic or logical relationship)
-3. Provide specific evidence explaining WHY they're connected
-4. Use relationship types from: ${COMMON_RELATIONS.join(', ')}
-5. Assign a confidence score (0.0-1.0) based on relationship strength:
-   - 0.9-1.0: Direct, explicit relationship
-   - 0.7-0.89: Strong implied relationship
-   - 0.6-0.69: Moderate, contextual relationship
+## Your Goal:
+Find ALL meaningful connections - be INCLUSIVE, not restrictive. The user will review and select which to keep.
 
-## Be SELECTIVE:
-- Quality over quantity
-- Skip weak or tenuous connections
-- Only return connections with confidence >= 0.6
+## Connection Types to Look For:
+1. **Direct**: The node IS an example, tool, person, or component of the anchor topic
+2. **Topical**: The node is about a related subject, field, or technology
+3. **Contextual**: The node provides context, background, or adjacent knowledge
+4. **Enabling**: The node enables, supports, or is used by the anchor topic
+5. **People/Orgs**: People or organizations associated with the anchor topic
+
+## Instructions:
+1. Cast a WIDE NET - include topically relevant connections even if not directly mentioned
+2. For tech/tool anchors: Include specific products, frameworks, companies in that space
+3. For concept anchors: Include related concepts, implementations, and practitioners
+4. Provide specific evidence explaining the connection
+5. Use relationship types from: ${COMMON_RELATIONS.join(', ')}
+6. Confidence scores:
+   - 0.9-1.0: Direct relationship (node IS about the anchor topic)
+   - 0.7-0.89: Strong topical relationship (same domain)
+   - 0.5-0.69: Related/contextual (adjacent topic)
+   - 0.4-0.49: Tangential but potentially useful
+
+## Return connections with confidence >= 0.4
   `;
 
   const nodesList = nodes.map(n =>
@@ -709,7 +718,7 @@ Description: ${anchor.description}
 CANDIDATE NODES TO EVALUATE (${nodes.length} nodes):
 ${nodesList}
 
-Analyze and return connections with confidence >= 0.6
+Find ALL relevant connections (confidence >= 0.4). Be inclusive - the user will review and select.
   `;
 
   try {
@@ -737,11 +746,11 @@ Analyze and return connections with confidence >= 0.6
 
     const connections = cleanAndParseJSON(response.text || '[]');
 
-    // Enrich with node metadata and filter by confidence
+    // Enrich with node metadata and filter by confidence (lowered to 0.4 for inclusivity)
     const enrichedConnections: ConnectionCandidate[] = [];
     for (const conn of connections) {
       const node = nodes.find(n => n.id === conn.target_node_id);
-      if (node && conn.confidence >= 0.6) {
+      if (node && conn.confidence >= 0.4) {
         enrichedConnections.push({
           target_node_id: conn.target_node_id,
           target_label: node.label,
