@@ -268,11 +268,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log(`[Scan] RSS returned ${videos.length} videos`);
 
       if (videos.length === 0) {
+        // Return debug info to help diagnose the issue
         return res.status(200).json({
           channel_name: channel.channel_name,
-          channel_id: channel.channel_id,
+          youtube_channel_id: channel.channel_id,
+          rss_url: `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.channel_id}`,
           videos: [],
-          message: 'No videos found in RSS feed. This could be due to YouTube rate limiting or an invalid channel ID.',
+          message: `No videos found. Try opening this RSS URL in your browser: https://www.youtube.com/feeds/videos.xml?channel_id=${channel.channel_id}`,
+          debug: {
+            db_channel_id: channel_id,
+            youtube_channel_id: channel.channel_id,
+            duration_filter: { min: minDuration, max: maxDuration },
+          }
         });
       }
 

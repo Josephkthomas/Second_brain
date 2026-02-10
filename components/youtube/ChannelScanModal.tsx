@@ -67,6 +67,11 @@ export default function ChannelScanModal({
     skipped: number;
     message: string;
   } | null>(null);
+  const [debugInfo, setDebugInfo] = useState<{
+    youtube_channel_id?: string;
+    rss_url?: string;
+    message?: string;
+  } | null>(null);
 
   // Fetch videos on mount
   useEffect(() => {
@@ -95,6 +100,17 @@ export default function ChannelScanModal({
       const data = await response.json();
       setVideos(data.videos || []);
       setSummary(data.summary || null);
+
+      // Store debug info if no videos found
+      if ((data.videos || []).length === 0) {
+        setDebugInfo({
+          youtube_channel_id: data.youtube_channel_id || data.debug?.youtube_channel_id,
+          rss_url: data.rss_url,
+          message: data.message,
+        });
+      } else {
+        setDebugInfo(null);
+      }
 
       // Auto-select all new videos
       const newVideoIds = (data.videos || [])
@@ -399,6 +415,26 @@ export default function ChannelScanModal({
                   <p className="text-sm text-slate-500 mt-1">
                     YouTube RSS feeds only show the most recent videos
                   </p>
+                  {debugInfo && (
+                    <div className="mt-4 p-3 bg-slate-800 rounded-lg text-left text-xs max-w-lg">
+                      <p className="text-slate-400 font-mono">
+                        YouTube ID: {debugInfo.youtube_channel_id || 'unknown'}
+                      </p>
+                      {debugInfo.rss_url && (
+                        <a
+                          href={debugInfo.rss_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-cyan-400 hover:text-cyan-300 underline block mt-1"
+                        >
+                          Test RSS Feed in Browser
+                        </a>
+                      )}
+                      {debugInfo.message && (
+                        <p className="text-slate-500 mt-2">{debugInfo.message}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto">
