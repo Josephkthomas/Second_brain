@@ -247,6 +247,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'channel_url is required' });
       }
 
+      // Validate linked_anchor_ids are valid UUIDs
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validAnchorIds = Array.isArray(linked_anchor_ids)
+        ? linked_anchor_ids.filter((id: string) => uuidRegex.test(id))
+        : [];
+
       // Resolve channel URL
       console.log('[channels] Resolving channel URL...');
       const channelInfo = await resolveChannelUrl(channel_url);
@@ -272,30 +278,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Insert channel
+      const insertPayload = {
+        user_id: user.id,
+        channel_id: channelInfo.channel_id,
+        channel_name: channelInfo.channel_name,
+        channel_url: channelInfo.channel_url,
+        thumbnail_url: channelInfo.thumbnail_url,
+        description: channelInfo.description,
+        subscriber_count: channelInfo.subscriber_count,
+        auto_ingest,
+        extraction_mode,
+        anchor_emphasis,
+        linked_anchor_ids: validAnchorIds,
+        custom_instructions,
+        min_video_duration,
+        max_video_duration,
+        is_active: true,
+        total_videos_ingested: 0,
+      };
+
+      console.log('[channels] Insert payload:', JSON.stringify(insertPayload, null, 2));
+
       const { data, error } = await supabase
         .from('youtube_channels')
-        .insert({
-          user_id: user.id,
-          channel_id: channelInfo.channel_id,
-          channel_name: channelInfo.channel_name,
-          channel_url: channelInfo.channel_url,
-          thumbnail_url: channelInfo.thumbnail_url,
-          description: channelInfo.description,
-          subscriber_count: channelInfo.subscriber_count,
-          auto_ingest,
-          extraction_mode,
-          anchor_emphasis,
-          linked_anchor_ids,
-          custom_instructions,
-          min_video_duration,
-          max_video_duration,
-          is_active: true,
-          total_videos_ingested: 0,
-        })
+        .insert(insertPayload)
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('[channels] Insert error:', JSON.stringify(error));
+        throw error;
+      }
 
       // If backfill requested, add recent videos to queue
       if (backfill_count > 0 && data) {
@@ -498,14 +511,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(405).json({ error: 'Method not allowed' });
 
-  } catch (error) {
-    console.error('YouTube channels API error:', error);
-    // Return more detailed error in dev
-    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
-    const errorStack = error instanceof Error ? error.stack : undefined;
+  } catch (error: any) {
+    console.error('YouTube channels API error:', JSON.stringify(error, null, 2));
+    // Handle both standard Errors and Supabase PostgrestErrors
+    const errorMessage = error?.message || (typeof error === 'string' ? error : 'Internal server error');
     return res.status(500).json({
       error: errorMessage,
-      details: process.env.NODE_ENV !== 'production' ? errorStack : undefined
+      code: error?.code,
+      details: error?.details || error?.hint,
     });
   }
 }
