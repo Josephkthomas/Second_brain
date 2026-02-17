@@ -5,8 +5,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI, Type } from '@google/genai';
-import { getSubtitles } from 'youtube-caption-extractor';
-
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
@@ -76,25 +74,208 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-// Method 2 fallback: Server-side transcript extraction from YouTube page HTML
-// (Port of Chrome extension's scrapeFromCaptionAPI approach in extension/src/content/youtube.ts)
-async function fetchTranscriptFromPage(videoId: string): Promise<string | null> {
-  try {
-    const response = await fetch(
-      `https://www.youtube.com/watch?v=${videoId}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-        },
+// YouTube InnerTube API configuration
+const INNERTUBE_API_BASE = 'https://www.youtube.com/youtubei/v1';
+const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_CLIENT_VERSION = '2.20250530.01.00';
+
+// Generate random visitor data for session
+function generateVisitorData(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let result = '';
+  for (let i = 0; i < 11; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Build InnerTube request context
+function buildInnerTubeContext() {
+  const visitorData = generateVisitorData();
+  return {
+    context: {
+      client: {
+        hl: 'en',
+        gl: 'US',
+        clientName: 'WEB',
+        clientVersion: INNERTUBE_CLIENT_VERSION,
+        visitorData,
+      },
+      user: { enableSafetyMode: false },
+      request: { useSsl: true },
+    },
+    visitorData,
+  };
+}
+
+// Make InnerTube API request
+async function fetchInnerTube(endpoint: string, body: any, visitorData: string): Promise<Response> {
+  return fetch(`${INNERTUBE_API_BASE}${endpoint}?key=${INNERTUBE_API_KEY}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': '*/*',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'X-Youtube-Client-Version': INNERTUBE_CLIENT_VERSION,
+      'X-Youtube-Client-Name': '1',
+      'X-Goog-Visitor-Id': visitorData,
+      'Origin': 'https://www.youtube.com',
+      'Referer': 'https://www.youtube.com/',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+// Decode HTML entities in transcript text
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code)))
+    .replace(/\n/g, ' ');
+}
+
+// Method 1: InnerTube Engagement Panel Transcript API
+// Always calls /next to get engagement panels, then /get_transcript for actual text
+// This is what YouTube's web player uses - works reliably from server-side
+async function fetchTranscriptFromInnerTube(videoId: string): Promise<{
+  transcript: string | null;
+  language: string | null;
+}> {
+  const { context, visitorData } = buildInnerTubeContext();
+
+  // Step 1: Call /next to get engagement panels (always, not just on LOGIN_REQUIRED)
+  console.log(`[Process] InnerTube: calling /next for ${videoId}`);
+  const nextResponse = await fetchInnerTube('/next', { ...{ context }, videoId }, visitorData);
+  if (!nextResponse.ok) {
+    throw new Error(`InnerTube /next failed: ${nextResponse.status}`);
+  }
+  const nextData = await nextResponse.json();
+
+  // Step 2: Find transcript engagement panel
+  const engagementPanels = nextData?.engagementPanels;
+  if (!engagementPanels || !Array.isArray(engagementPanels)) {
+    throw new Error('No engagement panels in response');
+  }
+
+  const transcriptPanel = engagementPanels.find(
+    (panel: any) => panel?.engagementPanelSectionListRenderer?.panelIdentifier === 'engagement-panel-searchable-transcript'
+  );
+  if (!transcriptPanel) {
+    throw new Error('No transcript panel found (video may not have captions)');
+  }
+
+  // Step 3: Extract continuation token from transcript panel
+  const panelContent = transcriptPanel.engagementPanelSectionListRenderer?.content;
+  let token: string | null = null;
+
+  // Path 1: Direct continuationItemRenderer
+  const continuationItem = panelContent?.continuationItemRenderer;
+  if (continuationItem?.continuationEndpoint?.continuationCommand?.token) {
+    token = continuationItem.continuationEndpoint.continuationCommand.token;
+  } else if (continuationItem?.continuationEndpoint?.getTranscriptEndpoint?.params) {
+    token = continuationItem.continuationEndpoint.getTranscriptEndpoint.params;
+  }
+
+  // Path 2: Inside sectionListRenderer
+  if (!token && panelContent?.sectionListRenderer?.contents?.[0]) {
+    const sectionItem = panelContent.sectionListRenderer.contents[0].continuationItemRenderer;
+    if (sectionItem?.continuationEndpoint?.continuationCommand?.token) {
+      token = sectionItem.continuationEndpoint.continuationCommand.token;
+    } else if (sectionItem?.continuationEndpoint?.getTranscriptEndpoint?.params) {
+      token = sectionItem.continuationEndpoint.getTranscriptEndpoint.params;
+    }
+  }
+
+  // Path 3: Inside transcriptRenderer footer (language menu)
+  if (!token && panelContent?.sectionListRenderer?.contents) {
+    for (const item of panelContent.sectionListRenderer.contents) {
+      if (item?.transcriptRenderer?.footer?.transcriptFooterRenderer?.languageMenu?.sortFilterSubMenuRenderer?.subMenuItems) {
+        const menuItems = item.transcriptRenderer.footer.transcriptFooterRenderer.languageMenu.sortFilterSubMenuRenderer.subMenuItems;
+        // Prefer English, then selected, then first
+        const selectedItem =
+          menuItems.find((mi: any) => mi?.title?.toLowerCase().includes('english')) ||
+          menuItems.find((mi: any) => mi?.selected === true) ||
+          menuItems[0];
+        if (selectedItem?.continuation?.reloadContinuationData?.continuation) {
+          token = selectedItem.continuation.reloadContinuationData.continuation;
+          break;
+        }
       }
-    );
+    }
+  }
+
+  if (!token) {
+    throw new Error('No continuation token found in transcript panel');
+  }
+
+  // Step 4: Call /get_transcript with the token
+  console.log(`[Process] InnerTube: calling /get_transcript for ${videoId}`);
+  const transcriptResponse = await fetchInnerTube('/get_transcript', { ...{ context }, params: token }, visitorData);
+  if (!transcriptResponse.ok) {
+    throw new Error(`InnerTube /get_transcript failed: ${transcriptResponse.status}`);
+  }
+  const transcriptData = await transcriptResponse.json();
+
+  // Step 5: Parse transcript segments
+  const segments = transcriptData
+    ?.actions?.[0]
+    ?.updateEngagementPanelAction
+    ?.content
+    ?.transcriptRenderer
+    ?.content
+    ?.transcriptSearchPanelRenderer
+    ?.body
+    ?.transcriptSegmentListRenderer
+    ?.initialSegments;
+
+  if (!segments || !Array.isArray(segments) || segments.length === 0) {
+    throw new Error('No transcript segments in response');
+  }
+
+  const textParts: string[] = [];
+  for (const segment of segments) {
+    const renderer = segment?.transcriptSegmentRenderer;
+    if (!renderer) continue;
+
+    let text = '';
+    if (renderer.snippet?.simpleText) {
+      text = renderer.snippet.simpleText;
+    } else if (renderer.snippet?.runs) {
+      text = renderer.snippet.runs.map((r: any) => r.text).join('');
+    } else if (renderer.snippet?.text) {
+      text = renderer.snippet.text;
+    }
+
+    text = decodeHtmlEntities(text).trim();
+    if (text) textParts.push(text);
+  }
+
+  return {
+    transcript: textParts.length > 0 ? textParts.join(' ') : null,
+    language: 'en',
+  };
+}
+
+// Method 2 fallback: Fetch timedtext XML from caption tracks in page HTML
+async function fetchTranscriptFromPageCaptions(videoId: string): Promise<string | null> {
+  try {
+    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Cookie': 'CONSENT=YES+1',
+      },
+    });
 
     if (!response.ok) return null;
     const html = await response.text();
 
-    // Extract ytInitialPlayerResponse JSON from page
+    // Extract ytInitialPlayerResponse JSON
     const playerMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var|<\/script>)/s);
     if (!playerMatch) return null;
 
@@ -108,7 +289,7 @@ async function fetchTranscriptFromPage(videoId: string): Promise<string | null> 
     const captionTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
     if (!captionTracks || captionTracks.length === 0) return null;
 
-    // Select best track: prefer English manual > English auto > any
+    // Select best track
     const selectedTrack =
       captionTracks.find((t: any) => t.languageCode === 'en' && !t.kind) ||
       captionTracks.find((t: any) => t.languageCode === 'en') ||
@@ -117,41 +298,37 @@ async function fetchTranscriptFromPage(videoId: string): Promise<string | null> 
 
     if (!selectedTrack?.baseUrl) return null;
 
-    // Fetch caption XML
-    const captionResponse = await fetch(selectedTrack.baseUrl);
+    // Fetch caption XML with referer
+    const captionResponse = await fetch(selectedTrack.baseUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': `https://www.youtube.com/watch?v=${videoId}`,
+      },
+    });
     if (!captionResponse.ok) return null;
 
     const xml = await captionResponse.text();
+    if (!xml.trim() || !xml.includes('<text')) return null;
 
-    // Parse <text> elements from XML using regex (no DOMParser in Node.js serverless)
+    // Parse <text> elements from XML
     const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
     const segments: string[] = [];
     let match;
     while ((match = textRegex.exec(xml)) !== null) {
-      let text = match[1].trim();
-      if (text) {
-        // Decode HTML entities
-        text = text
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/\n/g, ' ');
-        segments.push(text);
-      }
+      const text = decodeHtmlEntities(match[1].trim());
+      if (text) segments.push(text);
     }
 
     return segments.length > 0 ? segments.join(' ') : null;
   } catch (error) {
-    console.error('[Process] Page scraping fallback failed:', error);
+    console.error('[Process] Page caption fallback failed:', error);
     return null;
   }
 }
 
-// Main transcript fetching with two-method fallback chain
-// Method 1: youtube-caption-extractor (InnerTube API) - fast, reliable
-// Method 2: Direct page scraping (server-side port of Chrome extension approach)
+// Main transcript fetching with fallback chain
+// Method 1: InnerTube /next + /get_transcript (engagement panel API - most reliable from server-side)
+// Method 2: Page HTML caption tracks + timedtext XML (traditional fallback)
 async function fetchTranscript(videoUrl: string): Promise<{
   success: boolean;
   transcript: string | null;
@@ -163,38 +340,24 @@ async function fetchTranscript(videoUrl: string): Promise<{
     return { success: false, transcript: null, language: null, error: 'Could not extract video ID from URL' };
   }
 
-  // Method 1: youtube-caption-extractor (InnerTube API)
+  // Method 1: InnerTube Engagement Panel Transcript API
   try {
-    console.log(`[Process] Method 1: youtube-caption-extractor for ${videoId}`);
-    let subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
+    console.log(`[Process] Method 1: InnerTube engagement panel for ${videoId}`);
+    const result = await fetchTranscriptFromInnerTube(videoId);
 
-    // If no English subtitles, try without language filter
-    if (!subtitles || subtitles.length === 0) {
-      console.log('[Process] No English subtitles, trying any language...');
-      subtitles = await getSubtitles({ videoID: videoId });
-    }
-
-    if (subtitles && subtitles.length > 0) {
-      const transcript = subtitles
-        .map((s: { text: string }) => s.text)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      if (transcript.length >= 50) {
-        console.log(`[Process] Method 1 succeeded (${transcript.length} chars)`);
-        return { success: true, transcript, language: 'en' };
-      }
+    if (result.transcript && result.transcript.length >= 50) {
+      console.log(`[Process] Method 1 succeeded (${result.transcript.length} chars)`);
+      return { success: true, transcript: result.transcript, language: result.language };
     }
     console.log('[Process] Method 1 returned empty/short result');
   } catch (error) {
     console.error('[Process] Method 1 failed:', error instanceof Error ? error.message : error);
   }
 
-  // Method 2: Direct page scraping (server-side port of Chrome extension approach)
+  // Method 2: Page HTML caption tracks
   try {
-    console.log(`[Process] Method 2: Direct page scraping for ${videoId}`);
-    const transcript = await fetchTranscriptFromPage(videoId);
+    console.log(`[Process] Method 2: Page caption tracks for ${videoId}`);
+    const transcript = await fetchTranscriptFromPageCaptions(videoId);
 
     if (transcript && transcript.length >= 50) {
       console.log(`[Process] Method 2 succeeded (${transcript.length} chars)`);
@@ -623,7 +786,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
           .eq('id', item.id);
 
-        // Fetch transcript using youtube-caption-extractor with page scraping fallback
+        // Fetch transcript using InnerTube engagement panel API with page scraping fallback
         const transcriptResult = await fetchTranscript(item.video_url);
 
         if (!transcriptResult.success || !transcriptResult.transcript) {
