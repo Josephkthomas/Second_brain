@@ -113,10 +113,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       data = {
         ...data,
-        has_apify_key: !!process.env.APIFY_API_KEY,
-        apify_api_key_preview: process.env.APIFY_API_KEY
-          ? 'Configured globally'
-          : null,
         has_youtube_api_key: hasGlobalYoutubeKey || hasUserYoutubeKey,
         youtube_api_key_preview: hasGlobalYoutubeKey
           ? 'Configured globally'
@@ -175,7 +171,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updates.max_videos_per_channel = max;
       }
 
-      // Only allow updating specific fields (Apify key is now global, not per-user)
+      // Only allow updating specific fields
       const allowedFields = [
         'default_auto_ingest',
         'default_extraction_mode',
@@ -238,10 +234,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       data = {
         ...data,
-        has_apify_key: !!process.env.APIFY_API_KEY,
-        apify_api_key_preview: process.env.APIFY_API_KEY
-          ? 'Configured globally'
-          : null,
         has_youtube_api_key: hasGlobalYoutubeKey || hasUserYoutubeKey,
         youtube_api_key_preview: hasGlobalYoutubeKey
           ? 'Configured globally'

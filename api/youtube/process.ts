@@ -5,11 +5,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI, Type } from '@google/genai';
+import { getSubtitles } from 'youtube-caption-extractor';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const APIFY_API_KEY = process.env.APIFY_API_KEY!;
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -61,93 +61,157 @@ async function verifyUserAuth(req: VercelRequest): Promise<{ user: { id: string 
   return { user: { id: user.id }, isCron: false };
 }
 
-// Apify transcript extraction
-// Using pintostudio/youtube-transcript-scraper which returns timestamped segments
-const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
+// Extract video ID from various YouTube URL formats
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /[?&]v=([a-zA-Z0-9_-]{11})/,
+    /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+    /embed\/([a-zA-Z0-9_-]{11})/,
+    /shorts\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
 
-async function fetchTranscript(videoUrl: string, apifyApiKey: string): Promise<{
+// Method 2 fallback: Server-side transcript extraction from YouTube page HTML
+// (Port of Chrome extension's scrapeFromCaptionAPI approach in extension/src/content/youtube.ts)
+async function fetchTranscriptFromPage(videoId: string): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `https://www.youtube.com/watch?v=${videoId}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+      }
+    );
+
+    if (!response.ok) return null;
+    const html = await response.text();
+
+    // Extract ytInitialPlayerResponse JSON from page
+    const playerMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});\s*(?:var|<\/script>)/s);
+    if (!playerMatch) return null;
+
+    let playerResponse: any;
+    try {
+      playerResponse = JSON.parse(playerMatch[1]);
+    } catch {
+      return null;
+    }
+
+    const captionTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!captionTracks || captionTracks.length === 0) return null;
+
+    // Select best track: prefer English manual > English auto > any
+    const selectedTrack =
+      captionTracks.find((t: any) => t.languageCode === 'en' && !t.kind) ||
+      captionTracks.find((t: any) => t.languageCode === 'en') ||
+      captionTracks.find((t: any) => t.languageCode?.startsWith('en')) ||
+      captionTracks[0];
+
+    if (!selectedTrack?.baseUrl) return null;
+
+    // Fetch caption XML
+    const captionResponse = await fetch(selectedTrack.baseUrl);
+    if (!captionResponse.ok) return null;
+
+    const xml = await captionResponse.text();
+
+    // Parse <text> elements from XML using regex (no DOMParser in Node.js serverless)
+    const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
+    const segments: string[] = [];
+    let match;
+    while ((match = textRegex.exec(xml)) !== null) {
+      let text = match[1].trim();
+      if (text) {
+        // Decode HTML entities
+        text = text
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/\n/g, ' ');
+        segments.push(text);
+      }
+    }
+
+    return segments.length > 0 ? segments.join(' ') : null;
+  } catch (error) {
+    console.error('[Process] Page scraping fallback failed:', error);
+    return null;
+  }
+}
+
+// Main transcript fetching with two-method fallback chain
+// Method 1: youtube-caption-extractor (InnerTube API) - fast, reliable
+// Method 2: Direct page scraping (server-side port of Chrome extension approach)
+async function fetchTranscript(videoUrl: string): Promise<{
   success: boolean;
   transcript: string | null;
   language: string | null;
   error?: string;
 }> {
+  const videoId = extractVideoId(videoUrl);
+  if (!videoId) {
+    return { success: false, transcript: null, language: null, error: 'Could not extract video ID from URL' };
+  }
+
+  // Method 1: youtube-caption-extractor (InnerTube API)
   try {
-    // Start Actor run with waitForFinish to simplify the flow
-    const runResponse = await fetch(
-      `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apifyApiKey}`,
-        },
-        body: JSON.stringify({ videoUrl }),
-      }
-    );
+    console.log(`[Process] Method 1: youtube-caption-extractor for ${videoId}`);
+    let subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
 
-    if (!runResponse.ok) {
-      const errorBody = await runResponse.text();
-      console.error('[Process] Apify run failed:', runResponse.status, errorBody);
-      return { success: false, transcript: null, language: null, error: `Apify run failed: ${runResponse.status}` };
+    // If no English subtitles, try without language filter
+    if (!subtitles || subtitles.length === 0) {
+      console.log('[Process] No English subtitles, trying any language...');
+      subtitles = await getSubtitles({ videoID: videoId });
     }
 
-    const runData = await runResponse.json();
-    const runId = runData.data?.id;
-    const status = runData.data?.status;
-
-    if (status !== 'SUCCEEDED') {
-      return { success: false, transcript: null, language: null, error: `Transcript extraction failed: ${status}` };
-    }
-
-    // Fetch results from dataset
-    const resultsResponse = await fetch(
-      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
-      { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
-    );
-
-    const results = await resultsResponse.json();
-
-    if (!results || results.length === 0) {
-      return { success: false, transcript: null, language: null, error: 'No transcript found' };
-    }
-
-    // The pintostudio actor returns { data: [{start, dur, text}, ...] }
-    // Concatenate all text segments into a single transcript
-    const firstResult = results[0];
-    let transcript: string;
-
-    if (firstResult.data && Array.isArray(firstResult.data)) {
-      // Format: [{start, dur, text}, ...]
-      transcript = firstResult.data
-        .map((segment: { text?: string }) => segment.text || '')
+    if (subtitles && subtitles.length > 0) {
+      const transcript = subtitles
+        .map((s: { text: string }) => s.text)
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();
-    } else if (firstResult.transcript) {
-      // Some actors return transcript directly
-      transcript = firstResult.transcript;
-    } else {
-      return { success: false, transcript: null, language: null, error: 'Unexpected transcript format' };
-    }
 
-    if (!transcript || transcript.length < 50) {
-      return { success: false, transcript: null, language: null, error: 'Transcript too short or empty' };
+      if (transcript.length >= 50) {
+        console.log(`[Process] Method 1 succeeded (${transcript.length} chars)`);
+        return { success: true, transcript, language: 'en' };
+      }
     }
-
-    return {
-      success: true,
-      transcript,
-      language: firstResult.language || 'en',
-    };
+    console.log('[Process] Method 1 returned empty/short result');
   } catch (error) {
-    console.error('[Process] Transcript fetch error:', error);
-    return {
-      success: false,
-      transcript: null,
-      language: null,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    console.error('[Process] Method 1 failed:', error instanceof Error ? error.message : error);
   }
+
+  // Method 2: Direct page scraping (server-side port of Chrome extension approach)
+  try {
+    console.log(`[Process] Method 2: Direct page scraping for ${videoId}`);
+    const transcript = await fetchTranscriptFromPage(videoId);
+
+    if (transcript && transcript.length >= 50) {
+      console.log(`[Process] Method 2 succeeded (${transcript.length} chars)`);
+      return { success: true, transcript, language: 'en' };
+    }
+    console.log('[Process] Method 2 returned empty/short result');
+  } catch (error) {
+    console.error('[Process] Method 2 failed:', error instanceof Error ? error.message : error);
+  }
+
+  // All methods exhausted
+  return {
+    success: false,
+    transcript: null,
+    language: null,
+    error: 'All transcript extraction methods failed. Video may not have captions available.',
+  };
 }
 
 // Extraction schema - comprehensive for knowledge graph
@@ -498,6 +562,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id}, process_all: ${process_all})...`);
 
+    // Reset stale items stuck in processing for >10 minutes
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: staleItems } = await supabase
+      .from('youtube_ingestion_queue')
+      .update({
+        status: 'pending',
+        error_message: 'Reset: was stuck in processing state',
+        started_at: null,
+      })
+      .in('status', ['fetching_transcript', 'extracting'])
+      .lt('started_at', tenMinutesAgo)
+      .select('id');
+
+    if (staleItems && staleItems.length > 0) {
+      console.log(`[Process] Reset ${staleItems.length} stale processing items`);
+    }
+
     // Build query for pending items with channel info
     let query = supabase
       .from('youtube_ingestion_queue')
@@ -542,8 +623,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
           .eq('id', item.id);
 
-        // Fetch transcript using global Apify API key
-        const transcriptResult = await fetchTranscript(item.video_url, APIFY_API_KEY);
+        // Fetch transcript using youtube-caption-extractor with page scraping fallback
+        const transcriptResult = await fetchTranscript(item.video_url);
 
         if (!transcriptResult.success || !transcriptResult.transcript) {
           throw new Error(transcriptResult.error || 'Failed to fetch transcript');

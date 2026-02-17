@@ -921,7 +921,6 @@ export const fetchYouTubeSettings = async (): Promise<YouTubeSettings | null> =>
         .from('youtube_settings')
         .insert({
           user_id: userId,
-          apify_api_key: null,
           default_auto_ingest: true,
           default_extraction_mode: 'comprehensive',
           default_anchor_emphasis: 'standard',

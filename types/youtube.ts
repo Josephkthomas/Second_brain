@@ -89,7 +89,6 @@ export interface YouTubeQueueItem {
 export interface YouTubeSettings {
   id: string;
   user_id: string;
-  apify_api_key: string | null;
   youtube_api_key: string | null;  // YouTube Data API v3 key for duration filtering
   // Global defaults
   default_auto_ingest: boolean;
@@ -105,8 +104,6 @@ export interface YouTubeSettings {
   created_at: string;
   updated_at: string;
   // API-added fields (not in DB)
-  has_apify_key?: boolean;
-  apify_api_key_preview?: string | null;
   has_youtube_api_key?: boolean;
   youtube_api_key_preview?: string | null;
 }
@@ -148,7 +145,6 @@ export interface UpdateChannelFormData {
  * Form data for updating YouTube settings
  */
 export interface UpdateSettingsFormData {
-  apify_api_key?: string;
   youtube_api_key?: string;  // YouTube Data API v3 key for duration filtering
   default_auto_ingest?: boolean;
   default_extraction_mode?: ExtractionMode;
@@ -262,7 +258,6 @@ export interface QueueItemWithChannel extends YouTubeQueueItem {
  * Default YouTube settings for new users
  */
 export const DEFAULT_YOUTUBE_SETTINGS: Omit<YouTubeSettings, 'id' | 'user_id' | 'created_at' | 'updated_at'> = {
-  apify_api_key: null,
   default_auto_ingest: true,
   default_extraction_mode: 'comprehensive',
   default_anchor_emphasis: 'standard',
