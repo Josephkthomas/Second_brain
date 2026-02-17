@@ -88,7 +88,9 @@ function buildWatchHistoryPrompt(
 ): string {
   let prompt = `# Role: Watch History Knowledge Graph Analyst
 
-You are analyzing a batch of YouTube video titles and channel names to extract the knowledge graph that lives in the aggregate viewing pattern. You are NOT reading transcripts — you are inferring entities, topics, and relationships from **title patterns, channel context, and viewing frequency**.
+You are analyzing a batch of YouTube video titles and channel names to extract a KNOWLEDGE GRAPH — both entities (nodes) AND relationships (edges). You are NOT reading transcripts — you are inferring entities, topics, and their CONNECTIONS from **title patterns, channel context, and viewing frequency**.
+
+**CRITICAL: You MUST output both nodes AND edges. A graph without edges is useless. For every batch you should produce AT LEAST as many edges as nodes.**
 
 ## Batch Context
 Batch: "${batch.label}" (${batch.batch_type}-based)
@@ -107,29 +109,40 @@ Channels: ${batch.channel_names.slice(0, 10).join(', ')}${batch.channel_names.le
 - **Skill**: Skills the user appears to be developing
 - **Interest**: Identifiable interest clusters
 
-## Edge Types to Create
-1. **Knowledge source edges**: Channel X \`teaches\` Topic Y, Person X \`discusses\` Concept Y
-2. **Thematic bridges**: Concept X \`applies_to\` Topic Y (cross-domain connections)
-3. **Temporal evolution**: Topic X \`evolved_into\` Topic Y (if title dates suggest progression)
-4. **Standard semantic edges**: \`part_of\`, \`enables\`, \`relates_to\`, \`created_by\`, \`competes_with\`
-5. **Additional**: \`teaches\`, \`discusses\`, \`consumes_alongside\`, \`discovered_via\`, \`bridges\`
+## Edge Types to Create — YOU MUST CREATE EDGES
+For EVERY node you extract, create at least one edge connecting it to another node. The edges array must NOT be empty.
+
+**Required edge patterns (use these):**
+- Channel \`teaches\` Topic — e.g., {"source": "Fireship", "target": "Web Development", "relation": "teaches"}
+- Person \`discusses\` Topic — e.g., {"source": "Elon Musk", "target": "SpaceX", "relation": "discusses"}
+- Topic \`relates_to\` Topic — e.g., {"source": "Machine Learning", "target": "Python", "relation": "relates_to"}
+- Person \`created_by\` Channel — e.g., {"source": "Matt Wolfe", "target": "AI News", "relation": "created_by"}
+- Product \`part_of\` Topic — e.g., {"source": "React", "target": "Frontend Development", "relation": "part_of"}
+- Topic \`enables\` Skill — e.g., {"source": "TypeScript", "target": "Full-Stack Development", "relation": "enables"}
+- Concept \`applies_to\` Topic — e.g., {"source": "RAG", "target": "LLM Applications", "relation": "applies_to"}
+- Topic \`competes_with\` Topic — e.g., {"source": "Vue.js", "target": "React", "relation": "competes_with"}
+
+**Additional relations:** \`supports\`, \`leads_to\`, \`consumes_alongside\`, \`discovered_via\`, \`bridges\`, \`evolved_into\`, \`blocks\`, \`challenges\`
+
+**IMPORTANT:** The "source" and "target" in every edge MUST exactly match a node "label" from your nodes array. Do not use labels that don't exist in nodes.
 
 ## CRITICAL RULES
-1. **Extract the KNOWLEDGE SUBSTANCE** — not just topic labels. "Claude Code" not just "AI Tool".
-2. **Weight by viewing frequency** — entities from videos watched 3x+ should get higher view_weight and confidence.
-3. **Find cross-domain connections** — the most valuable extraction is when titles reveal connections between different domains.
-4. **Every node needs edges** — no orphan nodes.
-5. **Evidence field** — cite specific video titles that support each entity/edge.
-6. **Be specific** — "GPT-4o" not "AI model", "n8n" not "automation tool".
+1. **EDGES ARE MANDATORY** — you must return at least 1 edge per node. Aim for 1.5x-2x edges relative to nodes. A response with 0 edges is WRONG.
+2. **Extract the KNOWLEDGE SUBSTANCE** — not just topic labels. "Claude Code" not just "AI Tool".
+3. **Weight by viewing frequency** — entities from videos watched 3x+ should get higher view_weight and confidence.
+4. **Find cross-domain connections** — the most valuable extraction is when titles reveal connections between different domains.
+5. **Every node needs edges** — no orphan nodes. If a node has no edge, either add an edge or remove the node.
+6. **Evidence field** — cite specific video titles that support each entity/edge.
+7. **Be specific** — "GPT-4o" not "AI model", "n8n" not "automation tool".
 `;
 
   // Extraction mode instructions
   if (extractionMode === 'comprehensive' || extractionMode === 'relational') {
-    prompt += `\n## Mode: Comprehensive\nExtract ALL meaningful entities. Create dense edges. Aim for 15-40 nodes with 1.5-2x as many edges.\n`;
+    prompt += `\n## Mode: Comprehensive\nExtract ALL meaningful entities. Create dense edges. Aim for 15-40 nodes and 25-60 edges (1.5-2x nodes).\n`;
   } else if (extractionMode === 'strategic') {
-    prompt += `\n## Mode: Strategic\nFocus on high-level topics, goals, and strategic themes. 10-25 nodes.\n`;
+    prompt += `\n## Mode: Strategic\nFocus on high-level topics, goals, and strategic themes. 10-25 nodes and 15-40 edges.\n`;
   } else if (extractionMode === 'actionable') {
-    prompt += `\n## Mode: Actionable\nFocus on skills, tools, and actionable knowledge. 10-25 nodes.\n`;
+    prompt += `\n## Mode: Actionable\nFocus on skills, tools, and actionable knowledge. 10-25 nodes and 15-40 edges.\n`;
   }
 
   // Anchor injection
@@ -156,7 +169,12 @@ Channels: ${batch.channel_names.slice(0, 10).join(', ')}${batch.channel_names.le
     prompt += `- "${entry.video_title}" by ${entry.channel_name} (${date})${viewTag}\n`;
   }
 
-  prompt += `\n## Output\nProvide a batch_summary (2-3 sentence narrative of what this viewing pattern reveals about the user's interests) along with nodes and edges.\n`;
+  prompt += `\n## Output Requirements
+1. **nodes**: Array of entities extracted (15-40 for comprehensive mode)
+2. **edges**: Array of relationships between nodes — MUST NOT BE EMPTY. Every edge source/target must match a node label exactly. Aim for MORE edges than nodes.
+3. **batch_summary**: 2-3 sentence narrative of what this viewing pattern reveals about the user's interests.
+
+REMINDER: If your edges array is empty or has fewer entries than your nodes array, you are doing it wrong. Go back and create edges connecting your nodes.\n`;
 
   return prompt;
 }
@@ -207,7 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Call Gemini
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash',
-      contents: 'Extract knowledge graph entities and edges from the video titles listed in your instructions.',
+      contents: 'Extract knowledge graph entities (nodes) AND relationships (edges) from the video titles listed in your instructions. You MUST return both a populated nodes array and a populated edges array. Every node should connect to at least one other node via an edge.',
       config: {
         temperature: 0.1,
         systemInstruction: systemPrompt,
@@ -231,9 +249,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    let nodes = Array.isArray(result.nodes) ? result.nodes : [];
+    let edges = Array.isArray(result.edges) ? result.edges : [];
+
+    // Fallback: if model returned nodes but very few/no edges, generate basic edges
+    if (nodes.length > 0 && edges.length < nodes.length * 0.5) {
+      const fallbackEdges = generateFallbackEdges(nodes, batch.label, batch.channel_names);
+      edges = [...edges, ...fallbackEdges];
+    }
+
     return res.status(200).json({
-      nodes: Array.isArray(result.nodes) ? result.nodes : [],
-      edges: Array.isArray(result.edges) ? result.edges : [],
+      nodes,
+      edges,
       batch_summary: result.batch_summary || '',
     });
   } catch (error) {
@@ -243,4 +270,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
+}
+
+/**
+ * Generate basic edges when the model fails to produce enough.
+ * Connects nodes to the channel node and creates relates_to edges between same-type nodes.
+ */
+function generateFallbackEdges(
+  nodes: { label: string; type: string; description?: string }[],
+  batchLabel: string,
+  channelNames: string[]
+): { source: string; target: string; relation: string; evidence: string; weight: number }[] {
+  const edges: { source: string; target: string; relation: string; evidence: string; weight: number }[] = [];
+  const existingPairs = new Set<string>();
+
+  // Find Channel-type nodes, or use the batch label as a hub
+  const channelNodes = nodes.filter(n => n.type === 'Channel');
+  const hubLabel = channelNodes.length > 0
+    ? channelNodes[0].label
+    : nodes.find(n => n.type === 'Interest' || n.type === 'Topic')?.label;
+
+  if (!hubLabel) return edges;
+
+  // Connect non-hub nodes to the hub via appropriate relations
+  for (const node of nodes) {
+    if (node.label === hubLabel) continue;
+
+    const pairKey = `${hubLabel}->${node.label}`;
+    if (existingPairs.has(pairKey)) continue;
+    existingPairs.add(pairKey);
+
+    let relation = 'relates_to';
+    if (node.type === 'Topic' || node.type === 'Concept') {
+      relation = channelNodes.length > 0 ? 'teaches' : 'relates_to';
+    } else if (node.type === 'Person') {
+      relation = 'discusses';
+    } else if (node.type === 'Product/Technology') {
+      relation = 'discusses';
+    } else if (node.type === 'Skill') {
+      relation = 'enables';
+    }
+
+    edges.push({
+      source: hubLabel,
+      target: node.label,
+      relation,
+      evidence: `Inferred from batch "${batchLabel}"`,
+      weight: 0.5,
+    });
+  }
+
+  // Connect Topic/Concept nodes to each other via relates_to (up to 10 extra edges)
+  const topicNodes = nodes.filter(n => n.type === 'Topic' || n.type === 'Concept' || n.type === 'Product/Technology');
+  let extraCount = 0;
+  for (let i = 0; i < topicNodes.length && extraCount < 10; i++) {
+    for (let j = i + 1; j < topicNodes.length && extraCount < 10; j++) {
+      const pairKey = `${topicNodes[i].label}->${topicNodes[j].label}`;
+      if (existingPairs.has(pairKey)) continue;
+      existingPairs.add(pairKey);
+
+      edges.push({
+        source: topicNodes[i].label,
+        target: topicNodes[j].label,
+        relation: 'relates_to',
+        evidence: `Co-occurring topics in batch "${batchLabel}"`,
+        weight: 0.4,
+      });
+      extraCount++;
+    }
+  }
+
+  return edges;
 }
