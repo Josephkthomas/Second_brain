@@ -18,6 +18,7 @@ import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '..
 import type { AnchorNode } from '../types';
 import clsx from 'clsx';
 import YouTubeManager from './youtube/YouTubeManager';
+import WatchHistoryImporter from './watchHistory/WatchHistoryImporter';
 
 interface InjectionHubProps {
   onComplete: () => void;
@@ -29,7 +30,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input' | 'youtube';
+type HubMode = 'research' | 'input' | 'youtube' | 'watchHistory';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -975,8 +976,8 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           </p>
         </div>
 
-        {/* PROGRESS BAR - Hidden for YouTube mode */}
-        {hubMode !== 'youtube' && (
+        {/* PROGRESS BAR - Hidden for YouTube and watchHistory modes */}
+        {hubMode !== 'youtube' && hubMode !== 'watchHistory' && (
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
 
@@ -1025,6 +1026,9 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('youtube')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'youtube' ? "bg-red-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <Youtube size={16} /> YouTube Channels
+                    </button>
+                    <button onClick={() => setHubMode('watchHistory')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'watchHistory' ? "bg-orange-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
+                        <Upload size={16} /> Watch History
                     </button>
                 </div>
              </div>
@@ -1378,6 +1382,12 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              {hubMode === 'youtube' && (
                 <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
                     <YouTubeManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
+                </div>
+             )}
+
+             {hubMode === 'watchHistory' && (
+                <div className="animate-in fade-in">
+                    <WatchHistoryImporter onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
                 </div>
              )}
            </div>
