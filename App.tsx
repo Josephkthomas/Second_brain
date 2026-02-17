@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { WatchHistoryProvider, useWatchHistory } from './contexts/WatchHistoryContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -37,6 +38,7 @@ const LENS_ICONS: Record<LensType, any> = {
 
 const MainApp: React.FC = () => {
   const { signOut, user } = useAuth();
+  const { isImportActive } = useWatchHistory();
   // Navigation State
   const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
   const [showDataVault, setShowDataVault] = useState(false);
@@ -342,13 +344,16 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Data Vault</span>
               </button>
               
-              <button 
+              <button
                 onClick={() => setShowInjectionHub(true)}
                 className="flex items-center gap-2 bg-cyber-cyan hover:bg-cyan-400 text-black px-4 py-2 rounded-md text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105"
                 title="Quick Inject [Key: I]"
               >
                  <Plus size={16} strokeWidth={3} />
                  <span className="hidden sm:inline">Inject</span>
+                 {isImportActive && (
+                   <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse ml-1" />
+                 )}
               </button>
             </div>
 
@@ -519,6 +524,7 @@ const MainApp: React.FC = () => {
 const App: React.FC = () => {
   return (
     <AuthProvider>
+      <WatchHistoryProvider>
       <BrowserRouter>
         <Routes>
           {/* Redirect root to login */}
@@ -548,6 +554,7 @@ const App: React.FC = () => {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </BrowserRouter>
+      </WatchHistoryProvider>
     </AuthProvider>
   );
 };
