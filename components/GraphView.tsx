@@ -1589,8 +1589,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
             });
         }
 
-        // 2. Spotlight Logic for Filtered Context
-        if (focusSource || activeTagFilter) {
+        // 2. Spotlight Logic for Filtered Context (tag filter only — source filter uses static dimming)
+        if (!focusSource && activeTagFilter) {
             const transform = d3.zoomTransform(svg.node() as Element);
             const [px, py] = d3.pointer(event);
             const gx = transform.invertX(px);
@@ -1601,7 +1601,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 const status = getLensStatus(d);
                 if (status === 'focus') return 1;
                 if (status === 'hidden') return 0.02;
-                
+
                 // Check distance for Context nodes
                 const dist = Math.hypot(d.x - gx, d.y - gy);
                 return dist < SPOTLIGHT_RADIUS ? 1 : 0.2;
@@ -1616,19 +1616,19 @@ export const GraphView: React.FC<GraphViewProps> = ({
                     const dist = Math.hypot(d.x - gx, d.y - gy);
                     return dist < SPOTLIGHT_RADIUS ? 1 : 0.2;
                 });
-            
+
             // Update Links based on spotlight
             linkVisible.attr("stroke-opacity", (d: any) => {
                  const sStatus = getLensStatus(d.source);
                  const tStatus = getLensStatus(d.target);
-                 
+
                  // If both are focused, keep high opacity
                  if (sStatus === 'focus' && tStatus === 'focus') return 1;
-                 
+
                  // If either node is in spotlight, increase opacity
                  const sDist = Math.hypot(d.source.x - gx, d.source.y - gy);
                  const tDist = Math.hypot(d.target.x - gx, d.target.y - gy);
-                 
+
                  if (sDist < SPOTLIGHT_RADIUS || tDist < SPOTLIGHT_RADIUS) return 0.6;
 
                  return 0.1;
@@ -1740,7 +1740,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
          
          if (focusSource || activeTagFilter) {
              if (sStatus === 'focus' && tStatus === 'focus') return 1;
-             return 0.12; // Softly dimmed for non-focused edges
+             if (focusSource) return 0.25; // Clearly visible for non-focused edges in source mode
+             return 0.12; // Softly dimmed for non-focused edges in tag mode
          }
 
          if (pathfindingPath.size > 0) {
@@ -1982,7 +1983,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
          }
          
          // In Source Filter Mode or Tag Filter, context nodes are dimmed but visible
-         if ((focusSource || activeTagFilter) && status === 'context') return 0.35;
+         if (focusSource && status === 'context') return 0.5;
+         if (activeTagFilter && status === 'context') return 0.35;
          if (status === 'context') return 0.2;
          return 1;
       }) 
@@ -2124,7 +2126,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
       .attr("opacity", (d: GraphNode) => {
           if (xRayMode) return 1;
           const status = getLensStatus(d);
-          if ((focusSource || activeTagFilter) && status === 'context') return 0.3;
+          if (focusSource && status === 'context') return 0.5;
+          if (activeTagFilter && status === 'context') return 0.3;
           return 1;
       });
 

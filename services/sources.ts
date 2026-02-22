@@ -72,13 +72,17 @@ export const fetchSourcesWithStats = async (): Promise<SourceWithStats[]> => {
     }
   }
 
-  // Count edges where BOTH endpoints belong to the same source
+  // Count edges where AT LEAST ONE endpoint belongs to the source
   const edgeCountMap = new Map<string, number>();
   for (const e of edges) {
     const srcSource = nodeSourceMap.get(e.source_node_id);
     const tgtSource = nodeSourceMap.get(e.target_node_id);
-    if (srcSource && srcSource === tgtSource) {
-      edgeCountMap.set(srcSource, (edgeCountMap.get(srcSource) || 0) + 1);
+    // Attribute edge to each source that has an endpoint in it (deduplicate below)
+    const attributed = new Set<string>();
+    if (srcSource) attributed.add(srcSource);
+    if (tgtSource) attributed.add(tgtSource);
+    for (const sid of attributed) {
+      edgeCountMap.set(sid, (edgeCountMap.get(sid) || 0) + 1);
     }
   }
 
@@ -109,7 +113,7 @@ export const fetchNodesBySourceId = async (sourceId: string): Promise<SourceNode
 };
 
 /**
- * Fetch edges where BOTH endpoints belong to nodes from a given source.
+ * Fetch edges where AT LEAST ONE endpoint belongs to nodes from a given source.
  * Includes source/target labels for display.
  */
 export const fetchEdgesBySourceId = async (sourceId: string): Promise<SourceEdge[]> => {
@@ -126,14 +130,30 @@ export const fetchEdgesBySourceId = async (sourceId: string): Promise<SourceEdge
   const nodeIds = nodeRows.map(n => n.id);
   const labelMap = new Map(nodeRows.map(n => [n.id, n.label]));
 
-  // Fetch edges where both source and target are in this source's nodes
+  // Fetch edges where at least one endpoint is in this source's nodes
   const { data: edges, error: edgeErr } = await client
     .from('knowledge_edges')
     .select('id, source_node_id, target_node_id, relation_type, evidence')
-    .in('source_node_id', nodeIds)
-    .in('target_node_id', nodeIds);
+    .or(`source_node_id.in.(${nodeIds.join(',')}),target_node_id.in.(${nodeIds.join(',')})`);
 
   if (edgeErr || !edges) return [];
+
+  // For labels of nodes not in this source, fetch them
+  const missingIds = new Set<string>();
+  for (const e of edges) {
+    if (!labelMap.has(e.source_node_id)) missingIds.add(e.source_node_id);
+    if (!labelMap.has(e.target_node_id)) missingIds.add(e.target_node_id);
+  }
+
+  if (missingIds.size > 0) {
+    const { data: extraNodes } = await client
+      .from('knowledge_nodes')
+      .select('id, label')
+      .in('id', Array.from(missingIds));
+    if (extraNodes) {
+      extraNodes.forEach(n => labelMap.set(n.id, n.label));
+    }
+  }
 
   return edges.map(e => ({
     ...e,
