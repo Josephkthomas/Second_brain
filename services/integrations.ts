@@ -61,7 +61,7 @@ export async function createUserIntegration(
     .insert({
       user_id: userId,
       integration_slug: slug,
-      is_enabled: true,
+      status: 'active',
       webhook_token: needsWebhookToken ? generateWebhookToken() : null,
       config,
     })
@@ -73,7 +73,7 @@ export async function createUserIntegration(
 
 export async function updateUserIntegration(
   id: string,
-  updates: Partial<Pick<UserIntegration, 'is_enabled' | 'config' | 'webhook_token'>>
+  updates: Partial<Pick<UserIntegration, 'status' | 'config' | 'webhook_token'>>
 ): Promise<{ error: any }> {
   const client = getSupabase();
 

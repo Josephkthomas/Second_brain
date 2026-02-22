@@ -19,7 +19,7 @@ export default function CirclebackSetup({
   onSuccess,
   onDisconnect,
 }: CirclebackSetupProps) {
-  const isConnected = userIntegration?.is_enabled === true;
+  const isConnected = userIntegration?.status === 'active';
   const [step, setStep] = useState<Step>(isConnected ? 3 : 1);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [copied, setCopied] = useState(false);
@@ -91,7 +91,7 @@ export default function CirclebackSetup({
           <div>
             <p className="text-sm font-medium text-emerald-400">Connected</p>
             <p className="text-xs text-slate-400 mt-0.5">
-              {userIntegration.total_items_received} meetings ingested
+              {userIntegration.total_items_ingested} meetings ingested
               {userIntegration.last_received_at && (
                 <> &middot; Last received {new Date(userIntegration.last_received_at).toLocaleDateString()}</>
               )}

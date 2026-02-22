@@ -29,8 +29,8 @@ interface IntegrationTileProps {
 }
 
 export default function IntegrationTile({ integration, userIntegration, onClick }: IntegrationTileProps) {
-  const isConnected = userIntegration?.is_enabled === true;
-  const isPaused = userIntegration && !userIntegration.is_enabled;
+  const isConnected = userIntegration?.status === 'active';
+  const isPaused = userIntegration?.status === 'paused';
   const isComingSoon = integration.status === 'coming_soon';
 
   const Icon = ICON_MAP[integration.iconName] || Zap;
@@ -81,7 +81,7 @@ export default function IntegrationTile({ integration, userIntegration, onClick 
           <>
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[10px] text-emerald-400 font-medium">
-              {userIntegration!.total_items_received} ingested
+              {userIntegration!.total_items_ingested} ingested
             </span>
           </>
         ) : isPaused ? (

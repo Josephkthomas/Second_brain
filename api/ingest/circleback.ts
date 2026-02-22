@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid webhook token' });
   }
 
-  if (!integration.is_enabled) {
+  if (integration.status !== 'active') {
     return res.status(200).json({ message: 'Integration paused, webhook accepted but not queued' });
   }
 
@@ -143,7 +143,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   await supabase
     .from('user_integrations')
     .update({
-      total_items_received: (integration.total_items_received || 0) + 1,
+      total_items_ingested: (integration.total_items_ingested || 0) + 1,
       last_received_at: new Date().toISOString(),
       error_message: null,
     })

@@ -4,10 +4,10 @@ export interface UserIntegration {
   id: string;
   user_id: string;
   integration_slug: string;
-  is_enabled: boolean;
+  status: 'active' | 'paused' | 'error' | 'inactive';
   webhook_token: string | null;
   config: IntegrationConfig;
-  total_items_received: number;
+  total_items_ingested: number;
   last_received_at: string | null;
   error_message: string | null;
   created_at: string;
