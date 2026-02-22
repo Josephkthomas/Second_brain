@@ -8,8 +8,8 @@ import {
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
   Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap, ListTodo, Clock
 } from 'lucide-react';
-import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
-import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
+import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress, chunkAndEmbedSource } from '../services/gemini';
+import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended, insertSourceChunks } from '../services/supabase';
 import AnchorScanReviewModal from './AnchorScanReviewModal';
 import { getEntityConfig } from '../utils/theme';
 import { getExtractionSettingsOrDefaults } from '../services/extractionSettings';
@@ -928,6 +928,19 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         
         if (insertError) throw insertError;
         insertedNodes?.forEach(n => labelRemap.set(n.label, n.id));
+      }
+
+      // Chunk and embed the source for RAG grounding (non-blocking)
+      if (currentSourceId && inputText && inputText.length > 200) {
+        try {
+          const chunks = await chunkAndEmbedSource(currentSourceId, inputText, userId);
+          if (chunks.length > 0) {
+            await insertSourceChunks(chunks);
+            addLog(`[System] Created ${chunks.length} source chunks for RAG grounding.`);
+          }
+        } catch (chunkErr) {
+          console.warn('Source chunking failed (non-blocking):', chunkErr);
+        }
       }
 
       addLog(`[System] Re-wiring synaptic connections...`);

@@ -16,6 +16,55 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const getGenAI = () => new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
+// Chunking utilities for RAG grounding
+function chunkText(text: string, targetTokens = 500, overlapTokens = 100): string[] {
+  if (!text || text.trim().length === 0) return [];
+  const targetWords = Math.floor(targetTokens * 0.75);
+  const overlapWords = Math.floor(overlapTokens * 0.75);
+  const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+  const chunks: string[] = [];
+  let currentChunk: string[] = [];
+  let currentWordCount = 0;
+
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.trim().split(/\s+/).length;
+    if (currentWordCount + sentenceWords > targetWords && currentChunk.length > 0) {
+      chunks.push(currentChunk.join(' ').trim());
+      let overlapCount = 0;
+      const overlapSentences: string[] = [];
+      for (let i = currentChunk.length - 1; i >= 0; i--) {
+        const words = currentChunk[i].split(/\s+/).length;
+        if (overlapCount + words > overlapWords) break;
+        overlapCount += words;
+        overlapSentences.unshift(currentChunk[i]);
+      }
+      currentChunk = [...overlapSentences];
+      currentWordCount = overlapCount;
+    }
+    currentChunk.push(sentence.trim());
+    currentWordCount += sentenceWords;
+  }
+  if (currentChunk.length > 0) {
+    const lastChunk = currentChunk.join(' ').trim();
+    if (lastChunk.length > 50) chunks.push(lastChunk);
+  }
+  return chunks;
+}
+
+async function generateChunkEmbedding(text: string): Promise<number[]> {
+  const ai = getGenAI();
+  try {
+    const result = await ai.models.embedContent({
+      model: 'gemini-embedding-001',
+      contents: text,
+      config: { outputDimensionality: 768 },
+    });
+    return result.embeddings?.[0]?.values || [];
+  } catch {
+    return [];
+  }
+}
+
 // JSON parsing helper
 const cleanAndParseJSON = (text: string) => {
   if (!text) return {};
@@ -262,6 +311,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Chunk and embed source content for RAG grounding (non-blocking)
+    let chunksCreated = 0;
+    if (source.content && source.content.length > 200) {
+      try {
+        const textChunks = chunkText(source.content);
+        const chunksToInsert: any[] = [];
+        for (let i = 0; i < textChunks.length; i++) {
+          const embedding = await generateChunkEmbedding(textChunks[i]);
+          if (embedding.length > 0) {
+            chunksToInsert.push({
+              source_id: sourceId,
+              chunk_index: i,
+              content: textChunks[i],
+              token_count: Math.ceil(textChunks[i].split(/\s+/).length / 0.75),
+              embedding,
+              user_id: user.id,
+            });
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        if (chunksToInsert.length > 0) {
+          const { error: chunkError } = await supabase
+            .from('knowledge_source_chunks')
+            .insert(chunksToInsert);
+          if (!chunkError) chunksCreated = chunksToInsert.length;
+          else console.error('Chunk insert error:', chunkError);
+        }
+      } catch (chunkErr) {
+        console.warn('Source chunking failed (non-blocking):', chunkErr);
+      }
+    }
+
     // Update source metadata to mark as extracted
     await supabase
       .from('knowledge_sources')
@@ -271,7 +352,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           extraction_pending: false,
           extracted_at: new Date().toISOString(),
           nodes_created: nodesToInsert.length,
-          edges_created: edgesCreated
+          edges_created: edgesCreated,
+          chunks_created: chunksCreated
         }
       })
       .eq('id', sourceId);

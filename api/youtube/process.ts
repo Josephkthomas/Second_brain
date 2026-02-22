@@ -15,6 +15,55 @@ const CRON_SECRET = process.env.CRON_SECRET;
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const getGenAI = () => new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
+// Chunking utilities for RAG grounding
+function chunkText(text: string, targetTokens = 500, overlapTokens = 100): string[] {
+  if (!text || text.trim().length === 0) return [];
+  const targetWords = Math.floor(targetTokens * 0.75);
+  const overlapWords = Math.floor(overlapTokens * 0.75);
+  const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+  const chunks: string[] = [];
+  let currentChunk: string[] = [];
+  let currentWordCount = 0;
+
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.trim().split(/\s+/).length;
+    if (currentWordCount + sentenceWords > targetWords && currentChunk.length > 0) {
+      chunks.push(currentChunk.join(' ').trim());
+      let overlapCount = 0;
+      const overlapSentences: string[] = [];
+      for (let i = currentChunk.length - 1; i >= 0; i--) {
+        const words = currentChunk[i].split(/\s+/).length;
+        if (overlapCount + words > overlapWords) break;
+        overlapCount += words;
+        overlapSentences.unshift(currentChunk[i]);
+      }
+      currentChunk = [...overlapSentences];
+      currentWordCount = overlapCount;
+    }
+    currentChunk.push(sentence.trim());
+    currentWordCount += sentenceWords;
+  }
+  if (currentChunk.length > 0) {
+    const lastChunk = currentChunk.join(' ').trim();
+    if (lastChunk.length > 50) chunks.push(lastChunk);
+  }
+  return chunks;
+}
+
+async function generateChunkEmbedding(text: string): Promise<number[]> {
+  const ai = getGenAI();
+  try {
+    const result = await ai.models.embedContent({
+      model: 'gemini-embedding-001',
+      contents: text,
+      config: { outputDimensionality: 768 },
+    });
+    return result.embeddings?.[0]?.values || [];
+  } catch {
+    return [];
+  }
+}
+
 // Max items to process per batch (Vercel has 10-60s timeout on free tier)
 const MAX_ITEMS_PER_BATCH = 2;
 // Max items to process when user clicks "Process Now" (process_all mode)
@@ -681,6 +730,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               edgesCreated = edgesToInsert.length;
               console.log(`[Process] Created ${edgesCreated} internal edges`);
             }
+          }
+        }
+
+        // Chunk and embed source transcript for RAG grounding (non-blocking)
+        if (source?.id && transcriptResult.transcript && transcriptResult.transcript.length > 200) {
+          try {
+            const textChunks = chunkText(transcriptResult.transcript);
+            const chunksToInsert: any[] = [];
+            for (let i = 0; i < textChunks.length; i++) {
+              const embedding = await generateChunkEmbedding(textChunks[i]);
+              if (embedding.length > 0) {
+                chunksToInsert.push({
+                  source_id: source.id,
+                  chunk_index: i,
+                  content: textChunks[i],
+                  token_count: Math.ceil(textChunks[i].split(/\s+/).length / 0.75),
+                  embedding,
+                  user_id: item.user_id,
+                });
+              }
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            if (chunksToInsert.length > 0) {
+              const { error: chunkError } = await supabase
+                .from('knowledge_source_chunks')
+                .insert(chunksToInsert);
+              if (!chunkError) {
+                console.log(`[Process] Created ${chunksToInsert.length} source chunks for RAG grounding`);
+              } else {
+                console.error('[Process] Chunk insert error:', chunkError);
+              }
+            }
+          } catch (chunkErr) {
+            console.warn('[Process] Source chunking failed (non-blocking):', chunkErr);
           }
         }
 

@@ -66,7 +66,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     setLoading(true);
 
     try {
-      const response = await queryGraphRAG(`Trace the connections and impact of ${node.label}`, 'trace', node.id);
+      const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+      const response = await queryGraphRAG(`Trace the connections and impact of ${node.label}`, 'trace', node.id, history);
       
       const aiMsg: ChatMessage = {
         id: traceId + '_ai',
@@ -90,22 +91,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     if (!node) return;
     setSuggestionNode(null);
     const traceId = Date.now().toString();
-    
-    // Construct Context from last few messages to give the AI memory
-    const history = messages.slice(-4).map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n');
-    
-    const contextPrompt = `
-      CHAT HISTORY CONTEXT:
-      ${history}
-
-      TASK:
-      The user has zoomed into the node: "${node.label}".
-      Based on the GRAPH CONTEXT (neighbors of ${node.label}) and the CHAT HISTORY above:
-      1. Explain how "${node.label}" relates to our current conversation.
-      2. Highlight any specific connections, risks, or supports that are relevant to what we've been discussing.
-      
-      Keep it concise and insight-driven.
-    `;
 
     const userMsg: ChatMessage = {
       id: traceId,
@@ -118,8 +103,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     setLoading(true);
 
     try {
-      // Use 'trace' mode to fetch the node's neighbors from the graph
-      const response = await queryGraphRAG(contextPrompt, 'trace', node.id);
+      const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+      const response = await queryGraphRAG(
+        `Contextualize "${node.label}" relative to our conversation.`,
+        'trace',
+        node.id,
+        history
+      );
       
       const aiMsg: ChatMessage = {
         id: traceId + '_ai',
@@ -163,8 +153,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     setLoading(true);
 
     try {
-      // General RAG Query
-      const response = await queryGraphRAG(userText, 'general');
+      // General RAG Query with conversation history
+      const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+      const response = await queryGraphRAG(userText, 'general', undefined, history);
       
       const aiMsg: ChatMessage = {
         id: Date.now().toString() + '_ai',

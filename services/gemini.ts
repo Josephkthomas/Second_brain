@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TableRow, AnalysisResult, AnchorNode } from "../types";
-import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile } from "./supabase";
+import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile, hybridSearchNodes, deepGraphTraversal, searchSourceChunks } from "./supabase";
 import { buildProfileContext } from "../utils/profileContext";
 import { getAnchors } from "./anchorService";
 import { buildAnchorContext, hasAnchors } from "../utils/anchorContext";
@@ -46,18 +46,97 @@ const cleanAndParseJSON = (text: string) => {
 export const generateEmbedding = async (text: string): Promise<number[]> => {
   const ai = initGenAI();
   try {
-    // Note: Use text-embedding-004 for 768-dimensional vectors
-    // Correct parameter is 'contents' (plural), similar to generateContent
     const result = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-001',
       contents: text,
+      config: { outputDimensionality: 768 },
     });
-    return result.embedding?.values || [];
+    return (result as any).embedding?.values || result.embeddings?.[0]?.values || [];
   } catch (error) {
     console.error("Embedding generation failed:", error);
     return [];
   }
 };
+
+// --- SOURCE CHUNKING UTILITIES (Graph RAG v2) ---
+
+/**
+ * Split text into overlapping chunks for RAG retrieval.
+ * Uses sentence-aware splitting to avoid cutting mid-sentence.
+ */
+export function chunkText(text: string, targetTokens: number = 500, overlapTokens: number = 100): string[] {
+  if (!text || text.trim().length === 0) return [];
+
+  const targetWords = Math.floor(targetTokens * 0.75);
+  const overlapWords = Math.floor(overlapTokens * 0.75);
+  const sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+
+  const chunks: string[] = [];
+  let currentChunk: string[] = [];
+  let currentWordCount = 0;
+
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.trim().split(/\s+/).length;
+
+    if (currentWordCount + sentenceWords > targetWords && currentChunk.length > 0) {
+      chunks.push(currentChunk.join(' ').trim());
+
+      let overlapCount = 0;
+      const overlapSentences: string[] = [];
+      for (let i = currentChunk.length - 1; i >= 0; i--) {
+        const words = currentChunk[i].split(/\s+/).length;
+        if (overlapCount + words > overlapWords) break;
+        overlapCount += words;
+        overlapSentences.unshift(currentChunk[i]);
+      }
+
+      currentChunk = [...overlapSentences];
+      currentWordCount = overlapCount;
+    }
+
+    currentChunk.push(sentence.trim());
+    currentWordCount += sentenceWords;
+  }
+
+  if (currentChunk.length > 0) {
+    const lastChunk = currentChunk.join(' ').trim();
+    if (lastChunk.length > 50) chunks.push(lastChunk);
+  }
+
+  return chunks;
+}
+
+/**
+ * Chunk a source document and generate embeddings for each chunk.
+ */
+export async function chunkAndEmbedSource(
+  sourceId: string,
+  content: string,
+  userId: string
+): Promise<{ chunk_index: number; content: string; token_count: number; embedding: number[]; source_id: string; user_id: string }[]> {
+  const chunks = chunkText(content);
+  const results: { chunk_index: number; content: string; token_count: number; embedding: number[]; source_id: string; user_id: string }[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const embedding = await generateEmbedding(chunk);
+
+    if (embedding.length > 0) {
+      results.push({
+        source_id: sourceId,
+        chunk_index: i,
+        content: chunk,
+        token_count: Math.ceil(chunk.split(/\s+/).length / 0.75),
+        embedding,
+        user_id: userId,
+      });
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  return results;
+}
 
 // --- NEW: ENTITY RESOLUTION GATEKEEPER ---
 
@@ -1029,101 +1108,120 @@ export const suggestRelationship = async (
     } catch (e) { return { relation: 'relates_to', evidence: 'Manual' }; }
 };
 
-// --- UPDATED: GRAPH RAG CHAT AGENT (SEMANTIC) ---
+// --- GRAPH RAG v2: HYBRID RETRIEVAL + DEEP GRAPH CONTEXT + SOURCE GROUNDING ---
 
 export const queryGraphRAG = async (
   query: string,
   mode: 'general' | 'trace',
-  traceNodeId?: string
+  traceNodeId?: string,
+  conversationHistory?: { role: string; content: string }[]
 ): Promise<{ answer: string; nodes?: any[]; edges?: any[] }> => {
   const ai = initGenAI();
-  
+
   let contextText = "";
-  let dataArtifacts: { nodes: any[], edges: any[] } = { nodes: [], edges: [] };
-  
+  let dataArtifacts: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
+
   if (mode === 'trace' && traceNodeId) {
-    // A. Specific Node Trace (Graph Traversal)
-    const { nodes, edges } = await fetchNodeNeighbors(traceNodeId);
-    
-    if (nodes.length === 0) return { answer: "I couldn't find any information about that specific node in the graph." };
-    
+    // A. Specific Node Trace — deep 2-hop traversal
+    const { nodes, edges, paths } = await deepGraphTraversal([traceNodeId], 2, 5);
+
+    if (nodes.length === 0) {
+      return { answer: "I couldn't find any information about that specific node in the graph." };
+    }
+
     dataArtifacts = { nodes, edges };
     const centralNode = nodes.find(n => n.id === traceNodeId);
-    const neighbors = nodes.filter(n => n.id !== traceNodeId);
-    
+
     contextText = `
-      FOCUSED NODE: ${centralNode?.label} (${centralNode?.entity_type}) - ${centralNode?.description}
-      IMMEDIATE CONNECTIONS:
-      ${edges.map(e => {
-         const neighborId = e.source_node_id === traceNodeId ? e.target_node_id : e.source_node_id;
-         const neighbor = neighbors.find(n => n.id === neighborId);
-         const direction = e.source_node_id === traceNodeId ? "->" : "<-";
-         return `- ${direction} [${e.relation_type}] ${neighbor?.label} (${neighbor?.entity_type})`;
-      }).join('\n')}
+FOCUSED NODE: ${centralNode?.label} (${centralNode?.entity_type}) - ${centralNode?.description}
+
+GRAPH CONNECTIONS (2-hop traversal):
+${paths.join('\n')}
     `;
-  } else {
-    // B. Graph RAG - Keyword Search (Primary) with Semantic Search (Enhancement)
-    let nodes: any[] = [];
 
-    // Step 1: Always try keyword search first (reliable, works without embeddings)
-    console.log("Performing keyword search for:", query);
-    const searchTerms = await generateSearchQueries(query);
-    console.log("Generated search terms:", searchTerms);
-    nodes = await fetchRelevantNodes(searchTerms);
-    console.log("Keyword search found:", nodes.length, "nodes");
-
-    // Step 2: If keyword search found nothing, try semantic search as backup
-    if (nodes.length === 0) {
-      console.log("Keyword search returned no results, trying semantic search...");
-      const queryEmbedding = await generateEmbedding(query);
-      if (queryEmbedding.length > 0) {
-        nodes = await semanticSearchNodes(queryEmbedding, 0.4, 20);
-        console.log("Semantic search found:", nodes.length, "nodes");
+    // Fetch source chunks for grounding
+    const queryEmbedding = await generateEmbedding(query);
+    const sourceIds = [...new Set(nodes.map((n: any) => n.source_id).filter(Boolean))];
+    if (queryEmbedding.length > 0 && sourceIds.length > 0) {
+      const chunks = await searchSourceChunks(queryEmbedding, 0.25, 3, sourceIds);
+      if (chunks.length > 0) {
+        contextText += `\n\nSOURCE EXCERPTS:\n${chunks.map(c => `[Source Chunk]: ${c.content}`).join('\n\n')}`;
       }
     }
 
-    if (nodes.length === 0) {
-      return { answer: "I scanned the knowledge graph but didn't find specific nodes matching your query. Try using different keywords or check if the topic exists in your knowledge base." };
+  } else {
+    // B. General Query — Hybrid Search + Deep Traversal + Source Grounding
+
+    // Step 1: Generate query embedding and extract keywords in parallel
+    const [queryEmbedding, searchTerms] = await Promise.all([
+      generateEmbedding(query),
+      generateSearchQueries(query),
+    ]);
+
+    // Step 2: Hybrid search — keyword + semantic in parallel
+    console.log("Running hybrid search:", searchTerms);
+    const hybridResults = await hybridSearchNodes(searchTerms, queryEmbedding, {
+      keywordLimit: 20,
+      semanticLimit: 20,
+      semanticThreshold: 0.3,
+    });
+    console.log("Hybrid search found:", hybridResults.length, "nodes");
+
+    if (hybridResults.length === 0) {
+      return {
+        answer: "I scanned the knowledge graph but didn't find specific nodes matching your query. Try using different keywords or check if the topic exists in your knowledge base.",
+      };
     }
 
-    // Step 3: Local Graph Expansion (Fetch edges for top results)
-    const topNodes = nodes.slice(0, 8); 
-    const edgesPromises = topNodes.map(n => fetchNodeNeighbors(n.id));
-    const results = await Promise.all(edgesPromises);
-    
-    // Flatten results for artifacts
-    const allEdges = results.flatMap(r => r.edges);
-    const allNodes = [...nodes, ...results.flatMap(r => r.nodes)];
-    
-    const uniqueNodesMap = new Map();
-    allNodes.forEach(n => uniqueNodesMap.set(n.id, n));
-    dataArtifacts = { nodes: Array.from(uniqueNodesMap.values()), edges: allEdges };
+    // Step 3: Deep graph traversal from top seed nodes
+    const seedIds = hybridResults.slice(0, 6).map(n => n.id);
+    const { nodes: graphNodes, edges: graphEdges, paths } = await deepGraphTraversal(seedIds, 2, 4);
 
+    dataArtifacts = { nodes: graphNodes, edges: graphEdges };
+
+    // Step 4: Fetch source chunks for grounding
+    let sourceChunksText = "";
+    if (queryEmbedding.length > 0) {
+      const chunks = await searchSourceChunks(queryEmbedding, 0.3, 5);
+      if (chunks.length > 0) {
+        sourceChunksText = `\nSOURCE EXCERPTS (from original documents):\n${chunks.map(c => `[Source Chunk]: ${c.content}`).join('\n\n')}`;
+      }
+    }
+
+    // Step 5: Build rich context
     contextText = `
-      RELEVANT NODES FOUND:
-      ${nodes.map(n => `- ${n.label} (${n.entity_type}): ${n.description}`).join('\n')}
+RELEVANT ENTITIES:
+${hybridResults.slice(0, 12).map(n => `- ${n.label} (${n.entity_type}): ${n.description || 'No description'}`).join('\n')}
 
-      LOCAL CONNECTIVITY SAMPLES:
-      ${results.map((r, i) => {
-         const node = topNodes[i];
-         if(!node) return "";
-         return `Node: ${node.label}\nConnections: ${r.edges.slice(0, 3).map(e => `[${e.relation_type}]`).join(', ')}`;
-      }).join('\n')}
+GRAPH RELATIONSHIPS (multi-hop paths):
+${paths.slice(0, 20).join('\n')}
+${sourceChunksText}
     `;
   }
 
-  // 2. Synthesis
+  // Build conversation context for multi-turn coherence
+  let conversationContext = "";
+  if (conversationHistory && conversationHistory.length > 0) {
+    conversationContext = `\nRECENT CONVERSATION:\n${conversationHistory.slice(-4).map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n')}\n`;
+  }
+
+  // Synthesis
   const systemInstruction = `
-    You are SYNAPSE, an AI interface for a Knowledge Graph.
-    Answer based **strictly** on the provided GRAPH CONTEXT.
-    CITATION PROTOCOL:
-    - Mention entities as clickable references: [[Node Label]].
-    - Example: "[[Project Alpha]] is blocked by [[Budget Cuts]]."
-    - Do not invent citations.
-    - Return JSON with 'answer' key.
+You are SYNAPSE, an AI interface for a personal Knowledge Graph.
+Answer based **strictly** on the provided GRAPH CONTEXT and SOURCE EXCERPTS.
+
+RULES:
+1. Use the GRAPH RELATIONSHIPS to explain connections, causes, and dependencies.
+2. Use SOURCE EXCERPTS to provide specific details, quotes, or evidence when available.
+3. If the conversation history provides context for the current question, use it to scope your answer.
+4. Cite entities as clickable references: [[Node Label]].
+   Example: "[[Project Alpha]] is blocked by [[Budget Cuts]], which stems from [[Q3 Revenue Miss]]."
+5. Do NOT invent citations or information not in the context.
+6. If the context doesn't contain enough information, say so honestly.
+7. Return JSON with 'answer' key.
   `;
 
-  const prompt = `QUERY: "${query}"\nCONTEXT:\n${contextText}`;
+  const prompt = `QUERY: "${query}"\n${conversationContext}\nCONTEXT:\n${contextText}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -1133,18 +1231,18 @@ export const queryGraphRAG = async (
         systemInstruction,
         temperature: 0.3,
         responseMimeType: 'application/json',
-        responseSchema: { type: Type.OBJECT, properties: { answer: { type: Type.STRING } } }
-      }
+        responseSchema: { type: Type.OBJECT, properties: { answer: { type: Type.STRING } } },
+      },
     });
 
     const parsed = cleanAndParseJSON(response.text || '{}');
     return {
       answer: parsed.answer || "Analysis complete.",
       nodes: dataArtifacts.nodes,
-      edges: dataArtifacts.edges
+      edges: dataArtifacts.edges,
     };
-
   } catch (error) {
+    console.error("Graph RAG synthesis error:", error);
     return { answer: "I encountered an error querying the neural network." };
   }
 };

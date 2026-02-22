@@ -1087,3 +1087,199 @@ export const fetchYouTubeStats = async (): Promise<YouTubeStats> => {
 
 // Fetch user's anchors for dropdown selection (re-export for convenience)
 export const fetchUserAnchors = fetchAnchors;
+
+// --- SOURCE CHUNK FUNCTIONS (Graph RAG v2) ---
+
+/**
+ * Insert source chunks into the database
+ */
+export const insertSourceChunks = async (
+  chunks: { source_id: string; chunk_index: number; content: string; token_count: number; embedding: number[]; user_id: string }[]
+): Promise<{ error: any }> => {
+  const client = getSupabase();
+  if (chunks.length === 0) return { error: null };
+  const { error } = await client.from('knowledge_source_chunks').insert(chunks);
+  return { error };
+};
+
+/**
+ * Semantic search over source chunks, optionally filtered by source IDs
+ */
+export const searchSourceChunks = async (
+  embedding: number[],
+  matchThreshold: number = 0.3,
+  matchCount: number = 5,
+  filterSourceIds?: string[]
+): Promise<{ id: string; source_id: string; chunk_index: number; content: string; similarity: number }[]> => {
+  const client = getSupabase();
+  const { data, error } = await client.rpc('match_chunks', {
+    query_embedding: embedding,
+    match_threshold: matchThreshold,
+    match_count: matchCount,
+    filter_source_ids: filterSourceIds || null,
+  });
+  if (error) {
+    console.error('Chunk search failed:', error);
+    return [];
+  }
+  return data || [];
+};
+
+/**
+ * Check if a source already has chunks
+ */
+export const sourceHasChunks = async (sourceId: string): Promise<boolean> => {
+  const client = getSupabase();
+  const { count, error } = await client
+    .from('knowledge_source_chunks')
+    .select('*', { count: 'exact', head: true })
+    .eq('source_id', sourceId);
+  return (count || 0) > 0;
+};
+
+// --- HYBRID SEARCH & DEEP TRAVERSAL (Graph RAG v2) ---
+
+/**
+ * Hybrid search: run keyword + semantic in parallel, merge and deduplicate.
+ * Returns nodes ranked by combined score.
+ */
+export const hybridSearchNodes = async (
+  keywords: string[],
+  queryEmbedding: number[],
+  options: {
+    keywordLimit?: number;
+    semanticLimit?: number;
+    semanticThreshold?: number;
+  } = {}
+): Promise<{ id: string; label: string; entity_type: string; description?: string; source_id?: string; score: number }[]> => {
+  const {
+    keywordLimit = 20,
+    semanticLimit = 20,
+    semanticThreshold = 0.3,
+  } = options;
+
+  const [keywordResults, semanticResults] = await Promise.all([
+    fetchRelevantNodes(keywords),
+    queryEmbedding.length > 0
+      ? semanticSearchNodes(queryEmbedding, semanticThreshold, semanticLimit)
+      : Promise.resolve([]),
+  ]);
+
+  const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description?: string; source_id?: string; score: number }>();
+
+  // Keyword results: score based on position
+  keywordResults.slice(0, keywordLimit).forEach((node: any, index: number) => {
+    const keywordScore = 1 - (index / keywordResults.length) * 0.5;
+    nodeMap.set(node.id, { ...node, score: keywordScore });
+  });
+
+  // Semantic results: score based on similarity
+  semanticResults.forEach((node: any) => {
+    const semanticScore = node.similarity || 0.5;
+    const existing = nodeMap.get(node.id);
+    if (existing) {
+      existing.score = Math.min(existing.score + semanticScore * 0.5, 1.5);
+    } else {
+      nodeMap.set(node.id, {
+        id: node.id,
+        label: node.label,
+        entity_type: node.entity_type,
+        description: node.description,
+        score: semanticScore,
+      });
+    }
+  });
+
+  return Array.from(nodeMap.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 30);
+};
+
+/**
+ * Multi-hop graph traversal from seed nodes.
+ * Returns full subgraph with node details, edge context, and human-readable paths.
+ */
+export const deepGraphTraversal = async (
+  seedNodeIds: string[],
+  maxHops: number = 2,
+  maxNodesPerHop: number = 5
+): Promise<{
+  nodes: { id: string; label: string; entity_type: string; description?: string; source_id?: string }[];
+  edges: { source_node_id: string; target_node_id: string; relation_type: string; evidence?: string }[];
+  paths: string[];
+}> => {
+  const client = getSupabase();
+  const visitedNodeIds = new Set<string>(seedNodeIds);
+  const allEdges: any[] = [];
+  const allNodes = new Map<string, any>();
+  const paths: string[] = [];
+
+  // Fetch seed node details
+  const { data: seedNodes } = await client
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, description, source_id')
+    .in('id', seedNodeIds);
+
+  (seedNodes || []).forEach(n => allNodes.set(n.id, n));
+
+  let currentFrontier = [...seedNodeIds];
+
+  for (let hop = 0; hop < maxHops; hop++) {
+    if (currentFrontier.length === 0) break;
+
+    // Fetch edges connected to the current frontier using .in() filters
+    const { data: edges, error } = await client
+      .from('knowledge_edges')
+      .select('source_node_id, target_node_id, relation_type, evidence')
+      .or(`source_node_id.in.(${currentFrontier.join(',')}),target_node_id.in.(${currentFrontier.join(',')})`);
+
+    if (error || !edges) break;
+
+    // Identify new neighbor IDs
+    const newNeighborIds = new Set<string>();
+    for (const edge of edges) {
+      allEdges.push(edge);
+      const neighborId = visitedNodeIds.has(edge.source_node_id)
+        ? edge.target_node_id
+        : edge.source_node_id;
+      if (!visitedNodeIds.has(neighborId)) {
+        newNeighborIds.add(neighborId);
+        visitedNodeIds.add(neighborId);
+      }
+    }
+
+    // Fetch neighbor node details (limited per hop)
+    const neighborsToFetch = Array.from(newNeighborIds).slice(0, maxNodesPerHop * currentFrontier.length);
+    if (neighborsToFetch.length > 0) {
+      const { data: neighborNodes } = await client
+        .from('knowledge_nodes')
+        .select('id, label, entity_type, description, source_id')
+        .in('id', neighborsToFetch);
+      (neighborNodes || []).forEach(n => allNodes.set(n.id, n));
+    }
+
+    currentFrontier = neighborsToFetch;
+  }
+
+  // Build human-readable paths from edges
+  const uniqueEdges = new Map<string, any>();
+  for (const edge of allEdges) {
+    const key = `${edge.source_node_id}-${edge.relation_type}-${edge.target_node_id}`;
+    if (!uniqueEdges.has(key)) {
+      uniqueEdges.set(key, edge);
+      const sourceNode = allNodes.get(edge.source_node_id);
+      const targetNode = allNodes.get(edge.target_node_id);
+      if (sourceNode && targetNode) {
+        paths.push(
+          `"${sourceNode.label}" (${sourceNode.entity_type}) -[${edge.relation_type}]-> "${targetNode.label}" (${targetNode.entity_type})${edge.evidence ? ` | Evidence: ${edge.evidence}` : ''}`
+        );
+      }
+    }
+  }
+
+  return {
+    nodes: Array.from(allNodes.values()),
+    edges: Array.from(uniqueEdges.values()),
+    paths,
+  };
+};
