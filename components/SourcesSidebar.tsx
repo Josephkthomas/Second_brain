@@ -199,6 +199,14 @@ export const SourcesSidebar: React.FC<SourcesSidebarProps> = ({
                           {source.node_count} nodes
                         </span>
                       )}
+                      {source.edge_count > 0 && (
+                        <span className={clsx(
+                          'text-[9px] font-medium px-1 rounded',
+                          isSelected ? 'text-amber-400 bg-amber-900/30' : 'text-slate-400 bg-slate-800'
+                        )}>
+                          {source.edge_count} edges
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

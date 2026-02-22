@@ -232,7 +232,10 @@ const MainApp: React.FC = () => {
       <div className="absolute inset-0 z-10 pointer-events-none">
         
         {/* --- TOP LEFT ISLAND (Branding & Lenses) --- */}
-        <div className="absolute top-6 left-6 z-50 pointer-events-auto flex flex-col gap-2">
+        <div className={clsx(
+          "absolute top-6 z-50 pointer-events-auto flex flex-col gap-2 transition-all duration-300",
+          showSourceExplorer ? "left-[304px]" : "left-6"
+        )}>
            
            {/* Board Title */}
            <div 
@@ -345,7 +348,10 @@ const MainApp: React.FC = () => {
         </div>
 
         {/* --- TOP RIGHT ISLAND (Actions, Profile, Share) --- */}
-        <div className="absolute top-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
+        <div className={clsx(
+          "absolute top-6 z-50 pointer-events-auto flex items-center gap-3 transition-all duration-300",
+          selectedSourceId ? "right-[344px]" : "right-6"
+        )}>
             {/* Context Actions (Table Mode) */}
             {viewMode === 'table' && currentTable && (
                  <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-1 shadow-xl">

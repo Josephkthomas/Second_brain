@@ -1604,7 +1604,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 
                 // Check distance for Context nodes
                 const dist = Math.hypot(d.x - gx, d.y - gy);
-                return dist < SPOTLIGHT_RADIUS ? 1 : 0.05;
+                return dist < SPOTLIGHT_RADIUS ? 1 : 0.2;
             });
 
             // Update Text Labels based on spotlight
@@ -1612,9 +1612,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 .attr("opacity", (d: any) => {
                     const status = getLensStatus(d);
                     if (status === 'focus') return 1;
-                    
+
                     const dist = Math.hypot(d.x - gx, d.y - gy);
-                    return dist < SPOTLIGHT_RADIUS ? 1 : 0; 
+                    return dist < SPOTLIGHT_RADIUS ? 1 : 0.2;
                 });
             
             // Update Links based on spotlight
@@ -1630,8 +1630,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
                  const tDist = Math.hypot(d.target.x - gx, d.target.y - gy);
                  
                  if (sDist < SPOTLIGHT_RADIUS || tDist < SPOTLIGHT_RADIUS) return 0.6;
-                 
-                 return 0.05;
+
+                 return 0.1;
             });
         }
     });
@@ -1740,7 +1740,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
          
          if (focusSource || activeTagFilter) {
              if (sStatus === 'focus' && tStatus === 'focus') return 1;
-             return 0.05; // Very low opacity for non-focused edges by default
+             return 0.12; // Softly dimmed for non-focused edges
          }
 
          if (pathfindingPath.size > 0) {
@@ -1982,7 +1982,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
          }
          
          // In Source Filter Mode or Tag Filter, context nodes are dimmed but visible
-         if ((focusSource || activeTagFilter) && status === 'context') return 0.15;
+         if ((focusSource || activeTagFilter) && status === 'context') return 0.35;
          if (status === 'context') return 0.2;
          return 1;
       }) 
@@ -2124,7 +2124,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       .attr("opacity", (d: GraphNode) => {
           if (xRayMode) return 1;
           const status = getLensStatus(d);
-          if ((focusSource || activeTagFilter) && status === 'context') return 0;
+          if ((focusSource || activeTagFilter) && status === 'context') return 0.3;
           return 1;
       });
 

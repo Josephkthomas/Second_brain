@@ -11,6 +11,7 @@ export interface SourceWithStats {
   metadata?: any;
   created_at: string;
   node_count: number;
+  edge_count: number;
 }
 
 export interface SourceNode {
@@ -33,42 +34,58 @@ export interface SourceEdge {
 }
 
 /**
- * Fetch all knowledge_sources with a node count per source.
- * Two queries: sources list + grouped node counts, merged client-side.
+ * Fetch all knowledge_sources with node and edge counts per source.
+ * Three queries: sources + nodes (with IDs) + edges, merged client-side.
  */
 export const fetchSourcesWithStats = async (): Promise<SourceWithStats[]> => {
   const client = getSupabase();
 
-  const { data: sources, error: srcErr } = await client
-    .from('knowledge_sources')
-    .select('id, title, source_type, source_url, metadata, created_at')
-    .order('created_at', { ascending: false });
+  const [sourcesRes, nodesRes, edgesRes] = await Promise.all([
+    client
+      .from('knowledge_sources')
+      .select('id, title, source_type, source_url, metadata, created_at')
+      .order('created_at', { ascending: false }),
+    client
+      .from('knowledge_nodes')
+      .select('id, source_id'),
+    client
+      .from('knowledge_edges')
+      .select('source_node_id, target_node_id'),
+  ]);
 
-  if (srcErr || !sources) {
-    console.warn('Failed to fetch sources:', srcErr);
+  if (sourcesRes.error || !sourcesRes.data) {
+    console.warn('Failed to fetch sources:', sourcesRes.error);
     return [];
   }
 
-  // Get node counts grouped by source_id
-  const { data: nodes, error: nodeErr } = await client
-    .from('knowledge_nodes')
-    .select('source_id');
+  const sources = sourcesRes.data;
+  const nodes = nodesRes.data || [];
+  const edges = edgesRes.data || [];
 
-  if (nodeErr || !nodes) {
-    // Return sources with 0 counts if node query fails
-    return sources.map(s => ({ ...s, node_count: 0 }));
-  }
-
-  const countMap = new Map<string, number>();
+  // Build node count map and node→source lookup
+  const nodeCountMap = new Map<string, number>();
+  const nodeSourceMap = new Map<string, string>();
   for (const n of nodes) {
     if (n.source_id) {
-      countMap.set(n.source_id, (countMap.get(n.source_id) || 0) + 1);
+      nodeCountMap.set(n.source_id, (nodeCountMap.get(n.source_id) || 0) + 1);
+      nodeSourceMap.set(n.id, n.source_id);
+    }
+  }
+
+  // Count edges where BOTH endpoints belong to the same source
+  const edgeCountMap = new Map<string, number>();
+  for (const e of edges) {
+    const srcSource = nodeSourceMap.get(e.source_node_id);
+    const tgtSource = nodeSourceMap.get(e.target_node_id);
+    if (srcSource && srcSource === tgtSource) {
+      edgeCountMap.set(srcSource, (edgeCountMap.get(srcSource) || 0) + 1);
     }
   }
 
   return sources.map(s => ({
     ...s,
-    node_count: countMap.get(s.id) || 0,
+    node_count: nodeCountMap.get(s.id) || 0,
+    edge_count: edgeCountMap.get(s.id) || 0,
   }));
 };
 
