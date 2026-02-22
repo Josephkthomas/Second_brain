@@ -24,7 +24,7 @@ interface CirclebackSetupProps {
   onDisconnect: () => void;
 }
 
-type Step = 1 | 2 | 3;
+type Step = 0 | 1 | 2 | 3;
 
 export default function CirclebackSetup({
   integration,
@@ -34,7 +34,7 @@ export default function CirclebackSetup({
 }: CirclebackSetupProps) {
   const { session } = useAuth();
   const isConnected = userIntegration?.status === 'active';
-  const [step, setStep] = useState<Step>(isConnected ? 3 : 1);
+  const [step, setStep] = useState<Step>(isConnected ? 3 : 0);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -240,6 +240,41 @@ export default function CirclebackSetup({
             {disconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // ── STEP 0: Overview ──────────────────────────────────────
+  if (step === 0) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h3 className="text-sm font-semibold text-white mb-1">{integration.name}</h3>
+          <p className="text-xs text-slate-400 leading-relaxed">{integration.description}</p>
+        </div>
+
+        <div className="p-4 bg-slate-800/50 border border-white/5 rounded-xl space-y-2.5">
+          <p className="text-xs text-slate-400 font-medium">Setup steps</p>
+          {[
+            'Generate a unique webhook URL for your account',
+            'Add the URL to Circleback Automations',
+            'Verify the connection with a test request',
+          ].map((item, i) => (
+            <div key={i} className="flex items-start gap-2.5 text-xs text-slate-300">
+              <span className="shrink-0 w-4 h-4 rounded-full bg-slate-700 text-slate-400 flex items-center justify-center text-[10px] font-bold mt-0.5">
+                {i + 1}
+              </span>
+              {item}
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={() => setStep(1)}
+          className="w-full py-2.5 px-4 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          Get started
+        </button>
       </div>
     );
   }

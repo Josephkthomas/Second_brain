@@ -25,10 +25,11 @@ interface GraphViewProps {
   refreshTrigger?: number;
   activeLens: LensType;
   onLensChange: (lens: LensType) => void;
-  onTraceNode?: (node: GraphNode) => void; 
+  onTraceNode?: (node: GraphNode) => void;
   focusNodeId?: string | null;
   focusSource?: string | null;
   onClearSourceFilter?: () => void;
+  highlightedNodeId?: string | null;
 }
 
 const SCHEMA_CONFIG: GraphConfig = {
@@ -739,7 +740,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
     onTraceNode, 
     focusNodeId,
     focusSource,
-    onClearSourceFilter 
+    onClearSourceFilter,
+    highlightedNodeId
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1066,6 +1068,16 @@ export const GraphView: React.FC<GraphViewProps> = ({
         }
     }
   }, [focusNodeId, graphData.nodes]);
+
+  // Handle highlighted node from SourceDetailPanel
+  useEffect(() => {
+    if (highlightedNodeId && graphData.nodes.length > 0) {
+        const node = graphData.nodes.find(n => n.id === highlightedNodeId);
+        if (node) {
+            focusCameraOn(node);
+        }
+    }
+  }, [highlightedNodeId]);
 
   // Sync Interaction Mode with Linker State
   useEffect(() => {
@@ -1509,6 +1521,16 @@ export const GraphView: React.FC<GraphViewProps> = ({
     goldMerge.append("feMergeNode").attr("in", "coloredBlur"); // Double up for intensity
     goldMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
+    // Pulse ring animation for source-focused nodes
+    defs.append("style").text(`
+      @keyframes pulse-ring {
+        0% { r: 0; opacity: 0.6; stroke-width: 2; }
+        100% { r: 30; opacity: 0; stroke-width: 0.5; }
+      }
+      .pulse-ring { animation: pulse-ring 2s ease-out infinite; }
+      .pulse-ring-delayed { animation: pulse-ring 2s ease-out 1s infinite; }
+    `);
+
     defs.selectAll("marker")
       .data(["end"])
       .join("marker")
@@ -1800,6 +1822,25 @@ export const GraphView: React.FC<GraphViewProps> = ({
        .attr("opacity", 0)
        .attr("pointer-events", "none");
 
+    // Pulse ring layer for source-focused nodes
+    const pulseRingGroup = g.append("g").attr("class", "pulse-ring-layer").attr("pointer-events", "none");
+    if (focusSource) {
+      const focusedNodes = graphData.nodes.filter(n => n.source_id === focusSource);
+      focusedNodes.forEach(n => {
+        const grp = pulseRingGroup.append("g").attr("data-node-id", n.id);
+        grp.append("circle")
+          .attr("fill", "none")
+          .attr("stroke", "#fbbf24")
+          .attr("stroke-opacity", 0.6)
+          .attr("class", "pulse-ring");
+        grp.append("circle")
+          .attr("fill", "none")
+          .attr("stroke", "#fbbf24")
+          .attr("stroke-opacity", 0.4)
+          .attr("class", "pulse-ring-delayed");
+      });
+    }
+
     // REFACTORED DRAG BEHAVIOR to allow clicks in specific modes
     const drag = (simulation: d3.Simulation<GraphNode, undefined>) => {
         const dragstarted = (event: any, d: any) => {
@@ -2013,6 +2054,17 @@ export const GraphView: React.FC<GraphViewProps> = ({
          }
       }
 
+      // Highlighted node ring (clicked from SourceDetailPanel)
+      if (d.id === highlightedNodeId) {
+         sel.append("circle")
+           .attr("r", radius + 10)
+           .attr("fill", "none")
+           .attr("stroke", "#fde047")
+           .attr("stroke-width", 4)
+           .attr("stroke-opacity", 0.9)
+           .style("filter", "url(#gold-glow)");
+      }
+
       if (!isAnchor) {
          sel.append("circle")
            .attr("r", radius + 4)
@@ -2112,7 +2164,17 @@ export const GraphView: React.FC<GraphViewProps> = ({
       }
 
       node.attr("transform", d => `translate(${d.x},${d.y})`);
-      
+
+      // Update pulse ring positions
+      pulseRingGroup.selectAll<SVGGElement, unknown>("g").each(function() {
+        const grp = d3.select(this);
+        const nodeId = grp.attr("data-node-id");
+        const n = graphData.nodes.find(nd => nd.id === nodeId);
+        if (n && n.x != null && n.y != null) {
+          grp.attr("transform", `translate(${n.x},${n.y})`);
+        }
+      });
+
       if (linkerMode.active && linkerMode.source) {
           if (linkerMode.target) {
               ghostLine
@@ -2133,7 +2195,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     });
 
     return () => { simulation.stop(); };
-  }, [graphData, activeLens, focusedAnchorId, edgeMode, activeFlowLens, linkerMode, interactionMode, xRayMode, pathfindingPath, selectedNodes, isPaused, focusSource, activeTagFilter]);
+  }, [graphData, activeLens, focusedAnchorId, edgeMode, activeFlowLens, linkerMode, interactionMode, xRayMode, pathfindingPath, selectedNodes, isPaused, focusSource, activeTagFilter, highlightedNodeId]);
 
   // ... [drag function - kept same] ...
   const drag = (simulation: d3.Simulation<GraphNode, undefined>) => {
@@ -2166,6 +2228,25 @@ export const GraphView: React.FC<GraphViewProps> = ({
             .on("drag", dragged)
             .on("end", dragended);
     };
+
+  // ResizeObserver: update SVG viewBox when container resizes (panels open/close)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let timeout: ReturnType<typeof setTimeout>;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        const svgEl = svgRef.current;
+        if (svgEl) {
+          svgEl.setAttribute('width', `${el.clientWidth}`);
+          svgEl.setAttribute('height', `${el.clientHeight}`);
+        }
+      }, 100);
+    });
+    observer.observe(el);
+    return () => { observer.disconnect(); clearTimeout(timeout); };
+  }, []);
 
   return (
     <div className="relative w-full h-full flex overflow-hidden bg-slate-950 bg-dot-grid" ref={containerRef}>

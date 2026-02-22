@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Workflow, Mic, Youtube, ChevronRight } from 'lucide-react';
+import { Workflow, Mic, Terminal, Copy, Check } from 'lucide-react';
 import { INTEGRATIONS } from '../config/integrations';
 import { fetchUserIntegrations } from '../services/integrations';
 import type { UserIntegration } from '../types/integrations';
@@ -72,19 +72,19 @@ export const AutomatePanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Video & Content Section */}
+        {/* Raw API Section */}
         <div>
           <div className="flex items-center gap-2.5 mb-4">
             <div className="w-7 h-7 rounded-lg bg-slate-800 border border-white/10 flex items-center justify-center">
-              <Youtube size={14} className="text-slate-400" />
+              <Terminal size={14} className="text-emerald-400" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-white">Video & Content</h2>
-              <p className="text-xs text-slate-500">Subscribe to YouTube channels and auto-ingest new videos</p>
+              <h2 className="text-sm font-semibold text-white">Custom / API</h2>
+              <p className="text-xs text-slate-500">Send data directly via HTTP for custom integrations</p>
             </div>
           </div>
 
-          <YouTubeAutomationCard />
+          <RawApiCard />
         </div>
       </div>
 
@@ -104,17 +104,45 @@ export const AutomatePanel: React.FC = () => {
   );
 };
 
-const YouTubeAutomationCard: React.FC = () => (
-  <button className="w-full flex items-center justify-between p-4 rounded-xl border border-white/10 bg-slate-900/80 hover:bg-slate-800/80 hover:border-white/20 transition-all text-left group">
-    <div className="flex items-center gap-3">
-      <div className="w-9 h-9 rounded-lg bg-red-900/20 border border-red-900/40 flex items-center justify-center">
-        <Youtube size={18} className="text-red-400" />
+const RawApiCard: React.FC = () => {
+  const [copied, setCopied] = useState(false);
+  const endpoint = `${window.location.origin}/api/ingest/raw`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(endpoint);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="p-4 rounded-xl border border-white/10 bg-slate-900/80 space-y-3">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-emerald-900/20 border border-emerald-900/40 flex items-center justify-center">
+          <Terminal size={18} className="text-emerald-400" />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-white">Universal Ingest API</p>
+          <p className="text-xs text-slate-500">POST structured data to build your graph from any source</p>
+        </div>
       </div>
-      <div>
-        <p className="text-sm font-medium text-white">YouTube Channels</p>
-        <p className="text-xs text-slate-500">Subscribe to channels and auto-ingest new videos</p>
+
+      <div className="flex items-center gap-2 bg-black/40 border border-white/10 rounded-lg px-3 py-2">
+        <code className="text-[11px] text-emerald-400 font-mono flex-1 truncate">
+          POST {endpoint}
+        </code>
+        <button
+          onClick={handleCopy}
+          className="shrink-0 p-1 rounded hover:bg-white/10 text-slate-500 hover:text-white transition-colors"
+          title="Copy endpoint"
+        >
+          {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+        </button>
       </div>
+
+      <p className="text-[10px] text-slate-500 leading-relaxed">
+        Send a JSON body with <code className="text-slate-400">title</code>, <code className="text-slate-400">content</code>, and optional <code className="text-slate-400">source_type</code> fields.
+        Requires your Supabase auth token in the Authorization header.
+      </p>
     </div>
-    <ChevronRight size={16} className="text-slate-500 group-hover:text-slate-300 transition-colors" />
-  </button>
-);
+  );
+};

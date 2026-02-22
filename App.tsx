@@ -11,7 +11,8 @@ import { AIAnalyst } from './components/AIAnalyst';
 import { GraphView } from './components/GraphView';
 import { InjectionHub } from './components/InjectionHub';
 import { ChatInterface } from './components/ChatInterface';
-import { SourceLog } from './components/SourceLog';
+import { SourcesSidebar } from './components/SourcesSidebar';
+import { SourceDetailPanel } from './components/SourceDetailPanel';
 import { UserProfileSettings } from './components/UserProfileSettings';
 import { AnchorManager } from './components/AnchorManager';
 import { ExtractionSettings } from './components/ExtractionSettings';
@@ -22,7 +23,7 @@ import { AutomatePanel } from './components/AutomatePanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow, History
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -42,7 +43,6 @@ const MainApp: React.FC = () => {
   // Navigation State
   const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
   const [showDataVault, setShowDataVault] = useState(false);
-  const [showSourceLog, setShowSourceLog] = useState(false);
   const [showInjectionHub, setShowInjectionHub] = useState(false);
   const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [showAnchorManager, setShowAnchorManager] = useState(false);
@@ -51,7 +51,13 @@ const MainApp: React.FC = () => {
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
-  
+
+  // Source Explorer State (three-panel layout)
+  const [showSourceExplorer, setShowSourceExplorer] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
+  const [selectedSourceTitle, setSelectedSourceTitle] = useState<string>('');
+
   // Refresh coordination
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
 
@@ -163,21 +169,63 @@ const MainApp: React.FC = () => {
      if (viewMode !== 'graph') setViewMode('graph');
   };
 
+  const handleSourceSelect = (sourceId: string | null) => {
+    setSelectedSourceId(sourceId);
+    setFocusedSource(sourceId);
+    setHighlightedNodeId(null);
+    if (sourceId) {
+      // Find source title from sidebar data (will be set by sidebar)
+      setSelectedSourceTitle('');
+    }
+  };
+
+  const handleHighlightNode = (nodeId: string) => {
+    setHighlightedNodeId(nodeId);
+  };
+
   return (
     <div className="relative w-full h-screen bg-cyber-black text-slate-200 overflow-hidden font-sans selection:bg-cyber-cyan selection:text-black">
       
-      {/* 1. BACKGROUND LAYER (Graph View) */}
-      <div className="absolute inset-0 z-0">
-        <GraphView 
-          discoveredTables={discoveredTables} 
-          refreshTrigger={graphRefreshTrigger} 
-          activeLens={currentLens}
-          onLensChange={setCurrentLens}
-          onTraceNode={handleTraceNode}
-          focusNodeId={focusedNodeId}
-          focusSource={focusedSource}
-          onClearSourceFilter={() => setFocusedSource(null)}
+      {/* 1. THREE-PANEL LAYOUT (Sources Sidebar + Graph + Detail Panel) */}
+      <div className="absolute inset-0 z-0 flex">
+        {/* Left: Sources Sidebar */}
+        <SourcesSidebar
+          isOpen={showSourceExplorer}
+          selectedSourceId={selectedSourceId}
+          onSelectSource={handleSourceSelect}
+          onClose={() => {
+            setShowSourceExplorer(false);
+            setSelectedSourceId(null);
+            setFocusedSource(null);
+            setHighlightedNodeId(null);
+          }}
         />
+
+        {/* Center: Graph */}
+        <div className="flex-1 relative">
+          <GraphView
+            discoveredTables={discoveredTables}
+            refreshTrigger={graphRefreshTrigger}
+            activeLens={currentLens}
+            onLensChange={setCurrentLens}
+            onTraceNode={handleTraceNode}
+            focusNodeId={focusedNodeId}
+            focusSource={focusedSource}
+            onClearSourceFilter={() => { setFocusedSource(null); setSelectedSourceId(null); setHighlightedNodeId(null); }}
+            highlightedNodeId={highlightedNodeId}
+          />
+        </div>
+
+        {/* Right: Source Detail Panel */}
+        {selectedSourceId && (
+          <SourceDetailPanel
+            sourceId={selectedSourceId}
+            sourceTitle={selectedSourceTitle}
+            highlightedNodeId={highlightedNodeId}
+            onSelectNode={handleHighlightNode}
+            onClose={() => { setSelectedSourceId(null); setFocusedSource(null); setHighlightedNodeId(null); }}
+          />
+        )}
       </div>
 
       {/* 2. OVERLAY LAYER (Floating UI) */}
@@ -318,32 +366,18 @@ const MainApp: React.FC = () => {
             
             {/* Primary Actions */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
-               <button 
-                onClick={() => setShowSourceLog(true)}
+               <button
+                onClick={() => setShowSourceExplorer(prev => !prev)}
                 className={clsx(
                   "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
-                  showSourceLog
+                  showSourceExplorer
                     ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50"
                     : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
                 )}
-                title="View Source Handbook"
+                title="Source Explorer"
               >
                 <BookOpen size={16} />
                 <span className="hidden sm:inline">Sources</span>
-              </button>
-
-               <button 
-                onClick={() => setShowDataVault(true)}
-                className={clsx(
-                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
-                  showDataVault
-                    ? "bg-cyber-purple/20 text-cyber-purple border-cyber-purple/50"
-                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
-                )}
-                title="Data Vault [Key: []"
-              >
-                <Database size={16} />
-                <span className="hidden sm:inline">Data Vault</span>
               </button>
               
               <button
@@ -369,19 +403,6 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Automate</span>
               </button>
 
-              <button
-                onClick={() => setShowHistoryPanel(true)}
-                className={clsx(
-                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
-                  showHistoryPanel
-                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
-                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
-                )}
-                title="Processing History"
-              >
-                <History size={16} />
-                <span className="hidden sm:inline">History</span>
-              </button>
             </div>
 
             {/* User & Sign Out */}
@@ -543,13 +564,6 @@ const MainApp: React.FC = () => {
         onDiscoveredTables={setDiscoveredTables}
       />
 
-      {/* 6. DRAWER LAYER (Source Log) */}
-      <SourceLog 
-        isOpen={showSourceLog}
-        onClose={() => setShowSourceLog(false)}
-        onSelectSource={setFocusedSource}
-        activeSource={focusedSource}
-      />
 
       {/* 7. CHAT INTERFACE */}
       <ChatInterface
