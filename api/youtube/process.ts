@@ -661,10 +661,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               try {
                 const text = `${node.label}: ${node.description || ''}`;
                 const result = await ai.models.embedContent({
-                  model: 'text-embedding-004',
+                  model: 'gemini-embedding-001',
                   contents: text,
+                  config: { outputDimensionality: 768 },
                 });
-                const embedding = (result as any).embedding?.values || result.embeddings?.[0]?.values || [];
+                const embedding = result.embeddings?.[0]?.values || [];
 
                 if (embedding.length > 0) {
                   await supabase
