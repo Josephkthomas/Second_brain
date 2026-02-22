@@ -12,7 +12,6 @@ import { GraphView } from './components/GraphView';
 import { InjectionHub } from './components/InjectionHub';
 import { ChatInterface } from './components/ChatInterface';
 import { SourcesSidebar } from './components/SourcesSidebar';
-import { SourceDetailPanel } from './components/SourceDetailPanel';
 import { UserProfileSettings } from './components/UserProfileSettings';
 import { AnchorManager } from './components/AnchorManager';
 import { ExtractionSettings } from './components/ExtractionSettings';
@@ -52,11 +51,9 @@ const MainApp: React.FC = () => {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
 
-  // Source Explorer State (three-panel layout)
+  // Source Explorer State
   const [showSourceExplorer, setShowSourceExplorer] = useState(false);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
-  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
-  const [selectedSourceTitle, setSelectedSourceTitle] = useState<string>('');
 
   // Refresh coordination
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
@@ -172,15 +169,6 @@ const MainApp: React.FC = () => {
   const handleSourceSelect = (sourceId: string | null) => {
     setSelectedSourceId(sourceId);
     setFocusedSource(sourceId);
-    setHighlightedNodeId(null);
-    if (sourceId) {
-      // Find source title from sidebar data (will be set by sidebar)
-      setSelectedSourceTitle('');
-    }
-  };
-
-  const handleHighlightNode = (nodeId: string) => {
-    setHighlightedNodeId(nodeId);
   };
 
   return (
@@ -197,7 +185,6 @@ const MainApp: React.FC = () => {
             setShowSourceExplorer(false);
             setSelectedSourceId(null);
             setFocusedSource(null);
-            setHighlightedNodeId(null);
           }}
         />
 
@@ -211,21 +198,9 @@ const MainApp: React.FC = () => {
             onTraceNode={handleTraceNode}
             focusNodeId={focusedNodeId}
             focusSource={focusedSource}
-            onClearSourceFilter={() => { setFocusedSource(null); setSelectedSourceId(null); setHighlightedNodeId(null); }}
-            highlightedNodeId={highlightedNodeId}
+            onClearSourceFilter={() => { setFocusedSource(null); setSelectedSourceId(null); }}
           />
         </div>
-
-        {/* Right: Source Detail Panel */}
-        {selectedSourceId && (
-          <SourceDetailPanel
-            sourceId={selectedSourceId}
-            sourceTitle={selectedSourceTitle}
-            highlightedNodeId={highlightedNodeId}
-            onSelectNode={handleHighlightNode}
-            onClose={() => { setSelectedSourceId(null); setFocusedSource(null); setHighlightedNodeId(null); }}
-          />
-        )}
       </div>
 
       {/* 2. OVERLAY LAYER (Floating UI) */}
@@ -348,10 +323,7 @@ const MainApp: React.FC = () => {
         </div>
 
         {/* --- TOP RIGHT ISLAND (Actions, Profile, Share) --- */}
-        <div className={clsx(
-          "absolute top-6 z-50 pointer-events-auto flex items-center gap-3 transition-all duration-300",
-          selectedSourceId ? "right-[344px]" : "right-6"
-        )}>
+        <div className="absolute top-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
             {/* Context Actions (Table Mode) */}
             {viewMode === 'table' && currentTable && (
                  <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-1 shadow-xl">

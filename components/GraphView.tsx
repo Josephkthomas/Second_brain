@@ -29,7 +29,6 @@ interface GraphViewProps {
   focusNodeId?: string | null;
   focusSource?: string | null;
   onClearSourceFilter?: () => void;
-  highlightedNodeId?: string | null;
 }
 
 const SCHEMA_CONFIG: GraphConfig = {
@@ -741,7 +740,6 @@ export const GraphView: React.FC<GraphViewProps> = ({
     focusNodeId,
     focusSource,
     onClearSourceFilter,
-    highlightedNodeId
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1068,16 +1066,6 @@ export const GraphView: React.FC<GraphViewProps> = ({
         }
     }
   }, [focusNodeId, graphData.nodes]);
-
-  // Handle highlighted node from SourceDetailPanel
-  useEffect(() => {
-    if (highlightedNodeId && graphData.nodes.length > 0) {
-        const node = graphData.nodes.find(n => n.id === highlightedNodeId);
-        if (node) {
-            focusCameraOn(node);
-        }
-    }
-  }, [highlightedNodeId]);
 
   // Sync Interaction Mode with Linker State
   useEffect(() => {
@@ -1513,22 +1501,21 @@ export const GraphView: React.FC<GraphViewProps> = ({
     feMerge.append("feMergeNode").attr("in", "coloredBlur");
     feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // ENHANCED GOLD GLOW for Focus Nodes
+    // Subtle glow for source-focused nodes
     const goldFilter = defs.append("filter").attr("id", "gold-glow");
-    goldFilter.append("feGaussianBlur").attr("stdDeviation", "5").attr("result", "coloredBlur");
+    goldFilter.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "coloredBlur");
     const goldMerge = goldFilter.append("feMerge");
     goldMerge.append("feMergeNode").attr("in", "coloredBlur");
-    goldMerge.append("feMergeNode").attr("in", "coloredBlur"); // Double up for intensity
     goldMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Pulse ring animation for source-focused nodes
+    // Subtle pulse ring animation for source-focused nodes
     defs.append("style").text(`
       @keyframes pulse-ring {
-        0% { r: 0; opacity: 0.6; stroke-width: 2; }
-        100% { r: 30; opacity: 0; stroke-width: 0.5; }
+        0% { r: 0; opacity: 0.3; stroke-width: 1.5; }
+        100% { r: 22; opacity: 0; stroke-width: 0.3; }
       }
-      .pulse-ring { animation: pulse-ring 2s ease-out infinite; }
-      .pulse-ring-delayed { animation: pulse-ring 2s ease-out 1s infinite; }
+      .pulse-ring { animation: pulse-ring 3s ease-out infinite; }
+      .pulse-ring-delayed { animation: pulse-ring 3s ease-out 1.5s infinite; }
     `);
 
     defs.selectAll("marker")
@@ -1712,7 +1699,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
             const sNode = graphData.nodes.find(n => n.id === s);
             const tNode = graphData.nodes.find(n => n.id === t);
             if (sNode && tNode && getLensStatus(sNode) === 'focus' && getLensStatus(tNode) === 'focus') {
-                return "#fbbf24"; 
+                return "#818cf8"; // Soft indigo for focused edges
             }
           }
 
@@ -1727,7 +1714,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
             const sNode = graphData.nodes.find(n => n.id === s);
             const tNode = graphData.nodes.find(n => n.id === t);
             if (sNode && tNode && getLensStatus(sNode) === 'focus' && getLensStatus(tNode) === 'focus') {
-                return 3; // Thicker for filtered connection
+                return 2; // Slightly thicker for filtered connection
             }
           }
 
@@ -1776,7 +1763,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
             const sNode = graphData.nodes.find(n => n.id === s);
             const tNode = graphData.nodes.find(n => n.id === t);
             if (sNode && tNode && getLensStatus(sNode) === 'focus' && getLensStatus(tNode) === 'focus') {
-                return "url(#gold-glow)";
+                return "url(#glow)";
             }
           }
           return null;
@@ -1831,13 +1818,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
         const grp = pulseRingGroup.append("g").attr("data-node-id", n.id);
         grp.append("circle")
           .attr("fill", "none")
-          .attr("stroke", "#fbbf24")
-          .attr("stroke-opacity", 0.6)
+          .attr("stroke", "#818cf8")
+          .attr("stroke-opacity", 0.4)
           .attr("class", "pulse-ring");
         grp.append("circle")
           .attr("fill", "none")
-          .attr("stroke", "#fbbf24")
-          .attr("stroke-opacity", 0.4)
+          .attr("stroke", "#818cf8")
+          .attr("stroke-opacity", 0.25)
           .attr("class", "pulse-ring-delayed");
       });
     }
@@ -2013,12 +2000,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
       let filter = "url(#glow)";
       let strokeWidth = isAnchor ? 3 : 0;
 
-      // Special styling for Source Filter focus nodes
+      // Highlight source-filtered focus nodes with subtle indigo border (keep entity color)
       if ((focusSource || activeTagFilter) && status === 'focus') {
-         color = "#fbbf24"; // Gold fill
-         strokeColor = "#f59e0b"; // Darker gold stroke
-         filter = "url(#gold-glow)";
-         strokeWidth = 3;
+         strokeColor = "#818cf8"; // Soft indigo stroke
+         filter = "url(#glow)";
+         strokeWidth = 2.5;
       }
 
       const inPath = pathfindingPath.has(d.id);
@@ -2056,24 +2042,13 @@ export const GraphView: React.FC<GraphViewProps> = ({
          }
       }
 
-      // Highlighted node ring (clicked from SourceDetailPanel)
-      if (d.id === highlightedNodeId) {
-         sel.append("circle")
-           .attr("r", radius + 10)
-           .attr("fill", "none")
-           .attr("stroke", "#fde047")
-           .attr("stroke-width", 4)
-           .attr("stroke-opacity", 0.9)
-           .style("filter", "url(#gold-glow)");
-      }
-
       if (!isAnchor) {
          sel.append("circle")
            .attr("r", radius + 4)
            .attr("fill", "none")
-           .attr("stroke", (focusSource || activeTagFilter) && status === 'focus' ? "#f59e0b" : sourceStyle.stroke)
-           .attr("stroke-width", 2)
-           .attr("stroke-opacity", 0.8);
+           .attr("stroke", (focusSource || activeTagFilter) && status === 'focus' ? "#818cf8" : sourceStyle.stroke)
+           .attr("stroke-width", (focusSource || activeTagFilter) && status === 'focus' ? 1.5 : 2)
+           .attr("stroke-opacity", (focusSource || activeTagFilter) && status === 'focus' ? 0.6 : 0.8);
       }
 
       sel.append("circle")
@@ -2116,7 +2091,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       .attr("font-size", (d: GraphNode) => isAnchorNode(d) ? (d.id === focusedAnchorId ? "16px" : "14px") : "10px") 
       .attr("font-weight", (d: GraphNode) => isAnchorNode(d) ? "bold" : "normal")
       .attr("fill", (d: GraphNode) => {
-        if ((focusSource || activeTagFilter) && getLensStatus(d) === 'focus') return "#fbbf24";
+        if ((focusSource || activeTagFilter) && getLensStatus(d) === 'focus') return "#e2e8f0"; // Clean white for focused labels
         const anchorDetails = getAnchorDetails(d);
         return anchorDetails ? anchorDetails.color : "#e2e8f0";
       })
@@ -2198,7 +2173,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     });
 
     return () => { simulation.stop(); };
-  }, [graphData, activeLens, focusedAnchorId, edgeMode, activeFlowLens, linkerMode, interactionMode, xRayMode, pathfindingPath, selectedNodes, isPaused, focusSource, activeTagFilter, highlightedNodeId]);
+  }, [graphData, activeLens, focusedAnchorId, edgeMode, activeFlowLens, linkerMode, interactionMode, xRayMode, pathfindingPath, selectedNodes, isPaused, focusSource, activeTagFilter]);
 
   // ... [drag function - kept same] ...
   const drag = (simulation: d3.Simulation<GraphNode, undefined>) => {

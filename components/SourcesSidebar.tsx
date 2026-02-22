@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   BookOpen, Search, Youtube, Users, FileText, Globe,
-  StickyNote, X, Tag, Hash, ChevronLeft
+  StickyNote, Tag, Hash, ChevronLeft, ChevronDown, ChevronUp, Circle
 } from 'lucide-react';
-import { fetchSourcesWithStats, type SourceWithStats } from '../services/sources';
+import { fetchSourcesWithStats, fetchNodesBySourceId, fetchEdgesBySourceId, type SourceWithStats, type SourceNode, type SourceEdge } from '../services/sources';
+import { getEntityConfig } from '../utils/theme';
 import clsx from 'clsx';
 
 interface SourcesSidebarProps {
@@ -45,6 +46,13 @@ export const SourcesSidebar: React.FC<SourcesSidebarProps> = ({
   const [filterTag, setFilterTag] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Inline detail expansion state
+  const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null);
+  const [detailNodes, setDetailNodes] = useState<SourceNode[]>([]);
+  const [detailEdges, setDetailEdges] = useState<SourceEdge[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState<'nodes' | 'edges'>('nodes');
+
   const allTags = React.useMemo(() => {
     const tagSet = new Set<string>();
     sources.forEach(s => {
@@ -68,6 +76,30 @@ export const SourcesSidebar: React.FC<SourcesSidebarProps> = ({
       loadSources();
     }
   }, [isOpen, loadSources]);
+
+  // Collapse detail when source deselected
+  useEffect(() => {
+    if (!selectedSourceId) {
+      setExpandedSourceId(null);
+    }
+  }, [selectedSourceId]);
+
+  const handleToggleDetails = async (sourceId: string) => {
+    if (expandedSourceId === sourceId) {
+      setExpandedSourceId(null);
+      return;
+    }
+    setExpandedSourceId(sourceId);
+    setDetailTab('nodes');
+    setDetailLoading(true);
+    const [nodeData, edgeData] = await Promise.all([
+      fetchNodesBySourceId(sourceId),
+      fetchEdgesBySourceId(sourceId),
+    ]);
+    setDetailNodes(nodeData);
+    setDetailEdges(edgeData);
+    setDetailLoading(false);
+  };
 
   const filteredSources = sources.filter(s => {
     const matchesSearch = s.title.toLowerCase().includes(search.toLowerCase());
@@ -167,64 +199,181 @@ export const SourcesSidebar: React.FC<SourcesSidebarProps> = ({
             const Icon = getSourceIcon(source.source_type);
             const colorClass = getSourceColor(source.source_type);
             const isSelected = selectedSourceId === source.id;
+            const isExpanded = expandedSourceId === source.id;
 
             return (
-              <button
-                key={source.id}
-                onClick={() => onSelectSource(isSelected ? null : source.id)}
-                className={clsx(
-                  'w-full text-left p-2.5 rounded-lg border transition-all group',
-                  isSelected
-                    ? 'bg-amber-900/10 border-amber-500/40 border-l-2 border-l-amber-400'
-                    : 'bg-transparent border-white/5 hover:bg-white/5 hover:border-white/10'
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  <div className={clsx('p-1 rounded shrink-0 mt-0.5', colorClass)}>
-                    <Icon size={12} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={clsx('text-[11px] font-medium truncate', isSelected ? 'text-amber-300' : 'text-white')}>
-                      {source.title || 'Untitled'}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[9px] text-slate-500">
-                        {new Date(source.created_at).toLocaleDateString()}
-                      </span>
-                      {source.node_count > 0 && (
-                        <span className={clsx(
-                          'text-[9px] font-medium px-1 rounded',
-                          isSelected ? 'text-amber-400 bg-amber-900/30' : 'text-slate-400 bg-slate-800'
-                        )}>
-                          {source.node_count} nodes
+              <div key={source.id}>
+                {/* Source Card */}
+                <button
+                  onClick={() => onSelectSource(isSelected ? null : source.id)}
+                  className={clsx(
+                    'w-full text-left p-2.5 rounded-lg border transition-all group',
+                    isSelected
+                      ? 'bg-indigo-900/10 border-indigo-500/30 border-l-2 border-l-indigo-400'
+                      : 'bg-transparent border-white/5 hover:bg-white/5 hover:border-white/10'
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <div className={clsx('p-1 rounded shrink-0 mt-0.5', colorClass)}>
+                      <Icon size={12} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={clsx('text-[11px] font-medium truncate', isSelected ? 'text-indigo-300' : 'text-white')}>
+                        {source.title || 'Untitled'}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[9px] text-slate-500">
+                          {new Date(source.created_at).toLocaleDateString()}
                         </span>
-                      )}
-                      {source.edge_count > 0 && (
-                        <span className={clsx(
-                          'text-[9px] font-medium px-1 rounded',
-                          isSelected ? 'text-amber-400 bg-amber-900/30' : 'text-slate-400 bg-slate-800'
-                        )}>
-                          {source.edge_count} edges
-                        </span>
-                      )}
+                        {source.node_count > 0 && (
+                          <span className={clsx(
+                            'text-[9px] font-medium px-1 rounded',
+                            isSelected ? 'text-indigo-400 bg-indigo-900/30' : 'text-slate-400 bg-slate-800'
+                          )}>
+                            {source.node_count} nodes
+                          </span>
+                        )}
+                        {source.edge_count > 0 && (
+                          <span className={clsx(
+                            'text-[9px] font-medium px-1 rounded',
+                            isSelected ? 'text-indigo-400 bg-indigo-900/30' : 'text-slate-400 bg-slate-800'
+                          )}>
+                            {source.edge_count} edges
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Tags */}
-                {source.metadata?.tags && Array.isArray(source.metadata.tags) && source.metadata.tags.length > 0 && (
-                  <div className="flex gap-1 flex-wrap mt-1.5 ml-6">
-                    {source.metadata.tags.slice(0, 3).map((tag: string) => (
-                      <span key={tag} className="px-1 py-0 rounded text-[8px] font-medium bg-cyan-900/30 text-cyan-500 border border-cyan-800/50">
-                        {tag}
-                      </span>
-                    ))}
-                    {source.metadata.tags.length > 3 && (
-                      <span className="text-[8px] text-slate-500">+{source.metadata.tags.length - 3}</span>
+                  {/* Tags */}
+                  {source.metadata?.tags && Array.isArray(source.metadata.tags) && source.metadata.tags.length > 0 && (
+                    <div className="flex gap-1 flex-wrap mt-1.5 ml-6">
+                      {source.metadata.tags.slice(0, 3).map((tag: string) => (
+                        <span key={tag} className="px-1 py-0 rounded text-[8px] font-medium bg-cyan-900/30 text-cyan-500 border border-cyan-800/50">
+                          {tag}
+                        </span>
+                      ))}
+                      {source.metadata.tags.length > 3 && (
+                        <span className="text-[8px] text-slate-500">+{source.metadata.tags.length - 3}</span>
+                      )}
+                    </div>
+                  )}
+                </button>
+
+                {/* View Source Details toggle (only when selected) */}
+                {isSelected && (
+                  <div className="mt-1 ml-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleToggleDetails(source.id); }}
+                      className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded-md text-[10px] font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                    >
+                      {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                      <span>{isExpanded ? 'Hide details' : 'View source details'}</span>
+                      {!isExpanded && (
+                        <span className="ml-auto text-[9px] text-slate-600">
+                          {source.node_count}N / {source.edge_count}E
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Expanded inline detail panel */}
+                    {isExpanded && (
+                      <div className="mt-1 border border-white/5 rounded-lg bg-black/30 overflow-hidden">
+                        {/* Tabs */}
+                        <div className="flex border-b border-white/5">
+                          <button
+                            onClick={() => setDetailTab('nodes')}
+                            className={clsx(
+                              'flex-1 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors',
+                              detailTab === 'nodes'
+                                ? 'text-indigo-400 border-b border-indigo-400'
+                                : 'text-slate-500 hover:text-slate-300'
+                            )}
+                          >
+                            Nodes ({detailNodes.length})
+                          </button>
+                          <button
+                            onClick={() => setDetailTab('edges')}
+                            className={clsx(
+                              'flex-1 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors',
+                              detailTab === 'edges'
+                                ? 'text-indigo-400 border-b border-indigo-400'
+                                : 'text-slate-500 hover:text-slate-300'
+                            )}
+                          >
+                            Edges ({detailEdges.length})
+                          </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                          {detailLoading ? (
+                            <div className="text-center py-6 text-slate-500 text-[10px] animate-pulse">Loading...</div>
+                          ) : detailTab === 'nodes' ? (
+                            <div className="p-1.5 space-y-0.5">
+                              {detailNodes.length === 0 ? (
+                                <div className="text-center py-4 text-slate-500 text-[10px]">No nodes found.</div>
+                              ) : (
+                                detailNodes.map(node => {
+                                  const config = getEntityConfig(node.entity_type);
+                                  return (
+                                    <div
+                                      key={node.id}
+                                      className="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 transition-colors"
+                                    >
+                                      <Circle
+                                        size={7}
+                                        fill={config.color}
+                                        stroke={config.color}
+                                        className="shrink-0"
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-[10px] text-white truncate">{node.label}</p>
+                                        <span className="text-[8px] text-slate-500">{node.entity_type}</span>
+                                      </div>
+                                      {node.confidence != null && (
+                                        <span className="text-[8px] text-slate-600 shrink-0">
+                                          {Math.round(node.confidence * 100)}%
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          ) : (
+                            <div className="p-1.5 space-y-0.5">
+                              {detailEdges.length === 0 ? (
+                                <div className="text-center py-4 text-slate-500 text-[10px]">No edges found.</div>
+                              ) : (
+                                detailEdges.map(edge => (
+                                  <div
+                                    key={edge.id}
+                                    className="p-1.5 rounded hover:bg-white/5 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-1 text-[9px]">
+                                      <span className="text-white truncate max-w-[80px]">{edge.source_label}</span>
+                                      <span className="text-slate-600 shrink-0">→</span>
+                                      <span className="text-indigo-400 text-[8px] font-medium shrink-0">
+                                        {edge.relation_type.replace(/_/g, ' ')}
+                                      </span>
+                                      <span className="text-slate-600 shrink-0">→</span>
+                                      <span className="text-white truncate max-w-[80px]">{edge.target_label}</span>
+                                    </div>
+                                    {edge.evidence && (
+                                      <p className="text-[8px] text-slate-500 mt-0.5 truncate">{edge.evidence}</p>
+                                    )}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
-              </button>
+              </div>
             );
           })
         )}
