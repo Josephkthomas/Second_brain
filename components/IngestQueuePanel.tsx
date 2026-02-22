@@ -262,9 +262,9 @@ export default function IngestQueuePanel({ onGraphUpdate }: IngestQueuePanelProp
     return (
       <div className="flex flex-col items-center justify-center h-full text-slate-500">
         <Zap className="w-12 h-12 mb-4 opacity-50" />
-        <p className="text-lg font-medium">Ingest Queue is Empty</p>
-        <p className="text-sm mt-1">Content submitted via the API will appear here</p>
-        <p className="text-xs mt-3 text-slate-600">Use the API Settings tab to get started</p>
+        <p className="text-lg font-medium">Processing Queue is Empty</p>
+        <p className="text-sm mt-1">Content from integrations and the API will appear here</p>
+        <p className="text-xs mt-3 text-slate-600">Connect tools in Automations or use the Ingest API</p>
       </div>
     );
   }
@@ -381,6 +381,15 @@ export default function IngestQueuePanel({ onGraphUpdate }: IngestQueuePanelProp
                     <span className="text-xs text-slate-600">
                       {item.source_type}
                     </span>
+
+                    {/* Integration source */}
+                    {item.metadata?.ingestion_method && (
+                      <span className="text-xs text-violet-400/70 flex items-center gap-1">
+                        <Zap size={10} />
+                        {item.metadata.ingestion_method === 'circleback_webhook' ? 'Circleback'
+                          : item.metadata.ingestion_method.replace(/_/g, ' ')}
+                      </span>
+                    )}
 
                     {/* Extraction mode */}
                     <span className="text-xs text-slate-700">

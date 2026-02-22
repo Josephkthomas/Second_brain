@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Bot, ArrowRight, CheckCircle2, AlertCircle, Database, GitMerge, FileText,
   UploadCloud, Loader2, Sparkles, Cpu, BrainCircuit, User, Gavel, Lightbulb,
@@ -6,7 +6,7 @@ import {
   ShieldAlert, Flag, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
   Youtube, StickyNote, Users, Link as LinkIcon, Calendar, Quote, PieChart, Network, Share2, Search,
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
-  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap, Puzzle
+  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap, Puzzle, ListTodo, Clock
 } from 'lucide-react';
 import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
 import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
@@ -19,6 +19,8 @@ import type { AnchorNode } from '../types';
 import clsx from 'clsx';
 import YouTubeManager from './youtube/YouTubeManager';
 import { IntegrationsHub } from './integrations';
+import IngestQueuePanel from './IngestQueuePanel';
+import { useAuth } from '../contexts/AuthContext';
 
 interface InjectionHubProps {
   onComplete: () => void;
@@ -30,7 +32,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input' | 'youtube' | 'automations';
+type HubMode = 'research' | 'input' | 'youtube' | 'automations' | 'queue';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -43,8 +45,10 @@ const getSourceTypeIcon = (uri?: string) => {
 };
 
 export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphUpdate }) => {
+  const { session } = useAuth();
   const [step, setStep] = useState<Step>('input');
   const [hubMode, setHubMode] = useState<HubMode>('research');
+  const [queuePendingCount, setQueuePendingCount] = useState(0);
   
   // Input State
   const [sourceType, setSourceType] = useState<SourceType>('Research');
@@ -141,6 +145,29 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     loadDefaultExtractionSettings();
     generateSuggestions();
   }, []);
+
+  // Queue badge: poll pending count for the tab badge
+  const fetchQueuePendingCount = useCallback(async () => {
+    if (!session?.access_token || hubMode === 'queue') return;
+    try {
+      const res = await fetch('/api/ingest?status=pending&limit=200', {
+        headers: { 'Authorization': `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const active = (data.items || []).filter((i: any) =>
+          ['pending', 'extracting', 'cross_connecting', 'embedding'].includes(i.status)
+        ).length;
+        setQueuePendingCount(active);
+      }
+    } catch { /* silent */ }
+  }, [session?.access_token, hubMode]);
+
+  useEffect(() => {
+    fetchQueuePendingCount();
+    const interval = setInterval(fetchQueuePendingCount, 15000);
+    return () => clearInterval(interval);
+  }, [fetchQueuePendingCount]);
 
   const loadDefaultExtractionSettings = async () => {
     try {
@@ -977,7 +1004,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         </div>
 
         {/* PROGRESS BAR - Hidden for YouTube mode */}
-        {hubMode !== 'youtube' && hubMode !== 'automations' && (
+        {hubMode !== 'youtube' && hubMode !== 'automations' && hubMode !== 'queue' && (
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
 
@@ -1029,6 +1056,14 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('automations')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'automations' ? "bg-violet-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <Puzzle size={16} /> Automations
+                    </button>
+                    <button onClick={() => setHubMode('queue')} className={clsx("flex items-center gap-2 px-5 py-2 rounded-full text-sm font-bold transition-all relative", hubMode === 'queue' ? "bg-emerald-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
+                        <ListTodo size={16} /> Queue
+                        {queuePendingCount > 0 && hubMode !== 'queue' && (
+                          <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center bg-amber-500 text-white text-[10px] font-bold rounded-full px-1 shadow-lg animate-pulse">
+                            {queuePendingCount}
+                          </span>
+                        )}
                     </button>
                 </div>
              </div>
@@ -1388,6 +1423,26 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              {hubMode === 'automations' && (
                 <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
                     <IntegrationsHub onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
+                </div>
+             )}
+
+             {hubMode === 'queue' && (
+                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
+                    <div className="h-full flex flex-col">
+                        <div className="flex items-center justify-between mb-4 px-1">
+                            <div className="flex items-center gap-2">
+                                <ListTodo className="w-5 h-5 text-emerald-400" />
+                                <h2 className="text-lg font-bold text-slate-200">Processing Queue</h2>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-slate-500">
+                                <Clock size={12} />
+                                <span>Auto-processes every 5 minutes</span>
+                            </div>
+                        </div>
+                        <div className="flex-1 min-h-0">
+                            <IngestQueuePanel onGraphUpdate={onGraphUpdate} />
+                        </div>
+                    </div>
                 </div>
              )}
            </div>
