@@ -25,6 +25,10 @@
     {
       "path": "/api/youtube/process",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/ingest/process",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

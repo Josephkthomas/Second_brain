@@ -6,7 +6,7 @@ import {
   ShieldAlert, Flag, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
   Youtube, StickyNote, Users, Link as LinkIcon, Calendar, Quote, PieChart, Network, Share2, Search,
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
-  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye
+  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap
 } from 'lucide-react';
 import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
 import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
@@ -18,6 +18,7 @@ import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '..
 import type { AnchorNode } from '../types';
 import clsx from 'clsx';
 import YouTubeManager from './youtube/YouTubeManager';
+import ApiManager from './api/ApiManager';
 
 interface InjectionHubProps {
   onComplete: () => void;
@@ -29,7 +30,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input' | 'youtube';
+type HubMode = 'research' | 'input' | 'youtube' | 'api';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -976,7 +977,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         </div>
 
         {/* PROGRESS BAR - Hidden for YouTube mode */}
-        {hubMode !== 'youtube' && (
+        {hubMode !== 'youtube' && hubMode !== 'api' && (
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
 
@@ -1025,6 +1026,9 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('youtube')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'youtube' ? "bg-red-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <Youtube size={16} /> YouTube Channels
+                    </button>
+                    <button onClick={() => setHubMode('api')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'api' ? "bg-emerald-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
+                        <Zap size={16} /> API
                     </button>
                 </div>
              </div>
@@ -1378,6 +1382,12 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              {hubMode === 'youtube' && (
                 <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
                     <YouTubeManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
+                </div>
+             )}
+
+             {hubMode === 'api' && (
+                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
+                    <ApiManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
                 </div>
              )}
            </div>
