@@ -4,10 +4,16 @@ import type { IntegrationDefinition } from '../../config/integrations';
 import type { UserIntegration } from '../../types/integrations';
 import { deleteUserIntegration } from '../../services/integrations';
 import CirclebackSetup from './setups/CirclebackSetup';
+import FirefliesSetup from './setups/FirefliesSetup';
+import TldvSetup from './setups/TldvSetup';
+import MeetgeekSetup from './setups/MeetgeekSetup';
 
 // Registry of setup components per integration slug
 const SETUP_COMPONENTS: Record<string, React.FC<SetupComponentProps>> = {
   circleback: CirclebackSetup,
+  fireflies: FirefliesSetup,
+  tldv: TldvSetup,
+  meetgeek: MeetgeekSetup,
 };
 
 export interface SetupComponentProps {

@@ -6,7 +6,7 @@ import {
   ShieldAlert, Flag, BookOpen, Microscope, Tag, Video, MessageSquare, Newspaper,
   Youtube, StickyNote, Users, Link as LinkIcon, Calendar, Quote, PieChart, Network, Share2, Search,
   Anchor, Plus, Trophy, Hash, Save, Globe, GraduationCap, LayoutGrid, Upload, Copy, Mic, Paperclip, ChevronDown, ChevronRight, File,
-  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap, Puzzle, ListTodo, Clock
+  Library, MonitorPlay, FilePlus, PenTool, Layers, Edit3, TrendingUp, Settings2, Eye, Zap, ListTodo, Clock
 } from 'lucide-react';
 import { extractKnowledgeFromText, extractKnowledgeFromWeb, extractKnowledgeFromFile, generateCrossConnections, connectAnchorToKnowledgeEnhanced, mineContextFromRawText, performDeepResearch, transcribeAudio, generateSmartSuggestions, ExtractedGraph, ExtractionContext, generateEmbedding, resolveEntityMatch, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
 import { getSupabase, fetchExistingNodes, fetchRelevantNodes, fetchAnchors, createAnchor, saveKnowledgeSource, updateKnowledgeSource, searchKnowledgeSources, getCurrentUserId, semanticSearchNodes, semanticSearchNodesExtended } from '../services/supabase';
@@ -18,7 +18,6 @@ import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '..
 import type { AnchorNode } from '../types';
 import clsx from 'clsx';
 import YouTubeManager from './youtube/YouTubeManager';
-import { IntegrationsHub } from './integrations';
 import IngestQueuePanel from './IngestQueuePanel';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -32,7 +31,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input' | 'youtube' | 'automations' | 'queue';
+type HubMode = 'research' | 'input' | 'youtube' | 'queue';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -1004,7 +1003,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
         </div>
 
         {/* PROGRESS BAR - Hidden for YouTube mode */}
-        {hubMode !== 'youtube' && hubMode !== 'automations' && hubMode !== 'queue' && (
+        {hubMode !== 'youtube' && hubMode !== 'queue' && (
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
 
@@ -1053,9 +1052,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('youtube')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'youtube' ? "bg-red-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <Youtube size={16} /> YouTube Channels
-                    </button>
-                    <button onClick={() => setHubMode('automations')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'automations' ? "bg-violet-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
-                        <Puzzle size={16} /> Automations
                     </button>
                     <button onClick={() => setHubMode('queue')} className={clsx("flex items-center gap-2 px-5 py-2 rounded-full text-sm font-bold transition-all relative", hubMode === 'queue' ? "bg-emerald-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <ListTodo size={16} /> Queue
@@ -1417,12 +1413,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
              {hubMode === 'youtube' && (
                 <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
                     <YouTubeManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
-                </div>
-             )}
-
-             {hubMode === 'automations' && (
-                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
-                    <IntegrationsHub onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
                 </div>
              )}
 

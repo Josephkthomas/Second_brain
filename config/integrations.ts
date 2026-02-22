@@ -14,6 +14,10 @@ export interface IntegrationDefinition {
   iconName: string;        // Lucide icon name
   accentColor: string;     // Tailwind color prefix (e.g. 'indigo')
   webhookBased: boolean;
+  requiresApiKey?: boolean;
+  apiKeyLabel?: string;
+  apiKeyHelp?: string;
+  docsUrl?: string;
   defaultConfig: {
     source_type: string;
     extraction_mode: string;
@@ -63,10 +67,50 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
     tagline: 'Meeting Recordings',
     description: 'Import meeting recordings and transcripts',
     category: 'meetings',
-    status: 'coming_soon',
+    status: 'live',
     iconName: 'Flame',
     accentColor: 'red',
     webhookBased: true,
+    requiresApiKey: true,
+    apiKeyLabel: 'Fireflies API Key',
+    apiKeyHelp: 'Found in Fireflies → Settings → Integrations → Developer. Requires Business plan.',
+    docsUrl: 'https://docs.fireflies.ai/graphql-api/webhooks',
+    defaultConfig: {
+      source_type: 'Meeting',
+      extraction_mode: 'comprehensive',
+      anchor_emphasis: 'standard',
+    },
+    setupSteps: ['API Key', 'Connect', 'Configure', 'Done'],
+  },
+  {
+    slug: 'tldv',
+    name: 'tl;dv',
+    tagline: 'Meeting Recordings',
+    description: 'Sync meeting recordings and transcripts',
+    category: 'meetings',
+    status: 'live',
+    iconName: 'Mic',
+    accentColor: 'violet',
+    webhookBased: true,
+    docsUrl: 'https://intercom.help/tldv/en/articles/11583137-api-and-webhooks',
+    defaultConfig: {
+      source_type: 'Meeting',
+      extraction_mode: 'comprehensive',
+      anchor_emphasis: 'standard',
+    },
+    setupSteps: ['Connect', 'Configure', 'Done'],
+  },
+  {
+    slug: 'meetgeek',
+    name: 'MeetGeek',
+    tagline: 'Meeting Summaries',
+    description: 'Auto-ingest meeting summaries and transcripts',
+    category: 'meetings',
+    status: 'live',
+    iconName: 'Mic',
+    accentColor: 'emerald',
+    webhookBased: true,
+    docsUrl: 'https://docs.meetgeek.ai/api-reference/v1/appendix-webhooks',
     defaultConfig: {
       source_type: 'Meeting',
       extraction_mode: 'comprehensive',

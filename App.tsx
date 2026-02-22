@@ -18,9 +18,11 @@ import { ExtractionSettings } from './components/ExtractionSettings';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
+import { AutomatePanel } from './components/AutomatePanel';
+import { HistoryPanel } from './components/HistoryPanel';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow, History
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -45,6 +47,8 @@ const MainApp: React.FC = () => {
   const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [showAnchorManager, setShowAnchorManager] = useState(false);
   const [showExtractionSettings, setShowExtractionSettings] = useState(false);
+  const [showAutomatePanel, setShowAutomatePanel] = useState(false);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
   
@@ -342,13 +346,41 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Data Vault</span>
               </button>
               
-              <button 
+              <button
                 onClick={() => setShowInjectionHub(true)}
                 className="flex items-center gap-2 bg-cyber-cyan hover:bg-cyan-400 text-black px-4 py-2 rounded-md text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105"
                 title="Quick Inject [Key: I]"
               >
                  <Plus size={16} strokeWidth={3} />
                  <span className="hidden sm:inline">Inject</span>
+              </button>
+
+              <button
+                onClick={() => setShowAutomatePanel(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                  showAutomatePanel
+                    ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50"
+                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                )}
+                title="Automated Pipelines"
+              >
+                <Workflow size={16} />
+                <span className="hidden sm:inline">Automate</span>
+              </button>
+
+              <button
+                onClick={() => setShowHistoryPanel(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                  showHistoryPanel
+                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
+                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                )}
+                title="Processing History"
+              >
+                <History size={16} />
+                <span className="hidden sm:inline">History</span>
               </button>
             </div>
 
@@ -463,6 +495,40 @@ const MainApp: React.FC = () => {
                 onComplete={() => { setShowInjectionHub(false); handleGraphUpdate(); }} 
                 onGraphUpdate={handleGraphUpdate}
               />
+           </div>
+        </div>
+      )}
+
+      {/* 4b. MODAL LAYER (Automate Panel) */}
+      {showAutomatePanel && (
+        <div className="absolute inset-0 z-50 bg-cyber-black/95 backdrop-blur-xl animate-in slide-in-from-bottom-10">
+           <div className="absolute top-6 right-6 z-50">
+              <button
+                onClick={() => setShowAutomatePanel(false)}
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={24} />
+              </button>
+           </div>
+           <div className="h-full pt-20 pb-6 px-6">
+              <AutomatePanel />
+           </div>
+        </div>
+      )}
+
+      {/* 4c. MODAL LAYER (History Panel) */}
+      {showHistoryPanel && (
+        <div className="absolute inset-0 z-50 bg-cyber-black/95 backdrop-blur-xl animate-in slide-in-from-bottom-10">
+           <div className="absolute top-6 right-6 z-50">
+              <button
+                onClick={() => setShowHistoryPanel(false)}
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={24} />
+              </button>
+           </div>
+           <div className="h-full pt-20 pb-6 px-6">
+              <HistoryPanel />
            </div>
         </div>
       )}
