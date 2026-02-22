@@ -234,6 +234,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: 'Failed to insert nodes' });
     }
 
+    // Generate embeddings for inserted nodes
+    console.log(`Generating embeddings for ${nodesToInsert.length} nodes...`);
+    const ai = getGenAI();
+
+    for (const node of nodesToInsert) {
+      try {
+        const text = `${node.label}: ${node.description || ''}`;
+        const result = await ai.models.embedContent({
+          model: 'text-embedding-004',
+          contents: text,
+        });
+        const embedding = result.embedding?.values || [];
+
+        if (embedding.length > 0) {
+          await supabase
+            .from('knowledge_nodes')
+            .update({ embedding })
+            .eq('id', node.id);
+        }
+
+        // Rate limit protection
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (embError) {
+        console.error(`Embedding failed for node ${node.label}:`, embError);
+        // Continue — don't fail the whole extraction
+      }
+    }
+
     // Prepare edges for insertion
     const edgesToInsert = extracted.edges
       .filter((edge: any) => labelToId[edge.source] && labelToId[edge.target])

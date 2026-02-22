@@ -651,6 +651,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           } else {
             nodesCreated = nodesToInsert.length;
           }
+
+          // Generate embeddings for inserted nodes
+          if (nodesCreated > 0) {
+            console.log(`[Process] Generating embeddings for ${nodesCreated} nodes...`);
+            const ai = getGenAI();
+
+            for (const node of nodesToInsert) {
+              try {
+                const text = `${node.label}: ${node.description || ''}`;
+                const result = await ai.models.embedContent({
+                  model: 'text-embedding-004',
+                  contents: text,
+                });
+                const embedding = result.embedding?.values || [];
+
+                if (embedding.length > 0) {
+                  await supabase
+                    .from('knowledge_nodes')
+                    .update({ embedding })
+                    .eq('id', node.id);
+                }
+
+                // Rate limit protection
+                await new Promise(resolve => setTimeout(resolve, 100));
+              } catch (embError) {
+                console.error(`[Process] Embedding failed for ${node.label}:`, embError);
+              }
+            }
+            console.log(`[Process] Embedding generation complete`);
+          }
         }
 
         // Insert internal edges (relationships extracted from the video)
