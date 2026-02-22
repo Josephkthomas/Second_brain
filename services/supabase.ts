@@ -372,6 +372,35 @@ export const searchKnowledgeSources = async (query: string): Promise<{ id: strin
   return data || [];
 };
 
+/**
+ * Search knowledge_sources by title using ILIKE.
+ * Used by the RAG pipeline to find sources that match a user's query.
+ */
+export const searchSourcesByTitle = async (query: string): Promise<{ id: string; title: string; source_type: string; created_at: string }[]> => {
+  const client = getSupabase();
+  if (!query || query.trim().length < 2) return [];
+
+  // Split query into words and search for each
+  const words = query.trim().split(/\s+/).filter(w => w.length > 2);
+  if (words.length === 0) return [];
+
+  // Build OR conditions for each word against title
+  const conditions = words.map(w => `title.ilike.%${w.replace(/[^a-zA-Z0-9]/g, '')}%`).join(',');
+
+  const { data, error } = await client
+    .from('knowledge_sources')
+    .select('id, title, source_type, created_at')
+    .or(conditions)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (error) {
+    console.warn('searchSourcesByTitle failed:', error);
+    return [];
+  }
+  return data || [];
+};
+
 // Fetch nodes that are missing embeddings (for backfill)
 export const fetchNodesWithoutEmbeddings = async (limit: number = 50): Promise<{ id: string; label: string; description: string }[]> => {
   const client = getSupabase();
@@ -1150,13 +1179,16 @@ export const hybridSearchNodes = async (
     keywordLimit?: number;
     semanticLimit?: number;
     semanticThreshold?: number;
+    boostSourceIds?: string[];
   } = {}
 ): Promise<{ id: string; label: string; entity_type: string; description?: string; source_id?: string; score: number }[]> => {
   const {
     keywordLimit = 20,
     semanticLimit = 20,
     semanticThreshold = 0.3,
+    boostSourceIds = [],
   } = options;
+  const boostSet = new Set(boostSourceIds);
 
   const [keywordResults, semanticResults] = await Promise.all([
     fetchRelevantNodes(keywords),
@@ -1189,6 +1221,15 @@ export const hybridSearchNodes = async (
       });
     }
   });
+
+  // Boost nodes from matched sources
+  if (boostSet.size > 0) {
+    for (const node of nodeMap.values()) {
+      if (node.source_id && boostSet.has(node.source_id)) {
+        node.score *= 1.5;
+      }
+    }
+  }
 
   return Array.from(nodeMap.values())
     .sort((a, b) => b.score - a.score)

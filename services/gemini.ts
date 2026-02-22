@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TableRow, AnalysisResult, AnchorNode } from "../types";
-import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile, hybridSearchNodes, deepGraphTraversal, searchSourceChunks } from "./supabase";
+import { fetchRelevantNodes, fetchNodeNeighbors, semanticSearchNodes, fetchNodesWithoutEmbeddings, updateNodeEmbedding, countNodesWithoutEmbeddings, fetchUserProfile, hybridSearchNodes, deepGraphTraversal, searchSourceChunks, searchSourcesByTitle } from "./supabase";
 import { buildProfileContext } from "../utils/profileContext";
 import { getAnchors } from "./anchorService";
 import { buildAnchorContext, hasAnchors } from "../utils/anchorContext";
@@ -1108,27 +1108,82 @@ export const suggestRelationship = async (
     } catch (e) { return { relation: 'relates_to', evidence: 'Manual' }; }
 };
 
-// --- GRAPH RAG v2: HYBRID RETRIEVAL + DEEP GRAPH CONTEXT + SOURCE GROUNDING ---
+// --- AI QUERY UNDERSTANDING ---
+
+interface QueryAnalysis {
+  intent: string;
+  entities: string[];
+  keywords: string[];
+  source_hint: string;
+}
+
+const analyzeQuery = async (query: string): Promise<QueryAnalysis> => {
+  const ai = initGenAI();
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: `Analyze this knowledge graph query and extract structured information.\n\nQuery: "${query}"\n\nReturn JSON with:\n- intent: one of "source_lookup" (asking about a specific document/meeting/video), "topic_exploration" (exploring a concept), "risk_analysis" (looking for risks/blockers), "connection_trace" (tracing relationships), "general" (other)\n- entities: array of specific named entities mentioned (company names, project names, person names)\n- keywords: array of important search terms (include entities too)\n- source_hint: if the query references a specific source/meeting/video/document by name, extract that name (empty string if not)`,
+      config: {
+        temperature: 0,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            intent: { type: Type.STRING },
+            entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+            keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+            source_hint: { type: Type.STRING },
+          },
+        },
+      },
+    });
+    const parsed = cleanAndParseJSON(response.text || '{}');
+    return {
+      intent: parsed.intent || 'general',
+      entities: parsed.entities || [],
+      keywords: parsed.keywords?.length > 0 ? parsed.keywords : extractKeywordsFromQuery(query),
+      source_hint: parsed.source_hint || '',
+    };
+  } catch (error) {
+    console.warn('analyzeQuery failed, falling back to local extraction:', error);
+    return {
+      intent: 'general',
+      entities: [],
+      keywords: extractKeywordsFromQuery(query),
+      source_hint: '',
+    };
+  }
+};
+
+// --- GRAPH RAG v2.1: SOURCE-AWARE HYBRID RETRIEVAL + DEEP GRAPH + GROUNDING ---
+
+export type ProgressStep = { label: string; detail: string; status: 'active' | 'done' | 'error' };
 
 export const queryGraphRAG = async (
   query: string,
   mode: 'general' | 'trace',
   traceNodeId?: string,
-  conversationHistory?: { role: string; content: string }[]
+  conversationHistory?: { role: string; content: string }[],
+  onProgress?: (step: ProgressStep) => void
 ): Promise<{ answer: string; nodes?: any[]; edges?: any[] }> => {
   const ai = initGenAI();
 
   let contextText = "";
   let dataArtifacts: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
+  let matchedSourceNames: string[] = [];
 
   if (mode === 'trace' && traceNodeId) {
-    // A. Specific Node Trace — deep 2-hop traversal
+    // === TRACE MODE: Deep traversal from a specific node ===
+    onProgress?.({ label: 'Graph Traversal', detail: 'Tracing connections from node...', status: 'active' });
+
     const { nodes, edges, paths } = await deepGraphTraversal([traceNodeId], 2, 5);
 
     if (nodes.length === 0) {
+      onProgress?.({ label: 'Graph Traversal', detail: 'No connections found', status: 'error' });
       return { answer: "I couldn't find any information about that specific node in the graph." };
     }
 
+    onProgress?.({ label: 'Graph Traversal', detail: `Found ${nodes.length} nodes, ${edges.length} edges`, status: 'done' });
     dataArtifacts = { nodes, edges };
     const centralNode = nodes.find(n => n.id === traceNodeId);
 
@@ -1140,6 +1195,7 @@ ${paths.join('\n')}
     `;
 
     // Fetch source chunks for grounding
+    onProgress?.({ label: 'Source Grounding', detail: 'Retrieving source excerpts...', status: 'active' });
     const queryEmbedding = await generateEmbedding(query);
     const sourceIds = [...new Set(nodes.map((n: any) => n.source_id).filter(Boolean))];
     if (queryEmbedding.length > 0 && sourceIds.length > 0) {
@@ -1147,51 +1203,117 @@ ${paths.join('\n')}
       if (chunks.length > 0) {
         contextText += `\n\nSOURCE EXCERPTS:\n${chunks.map(c => `[Source Chunk]: ${c.content}`).join('\n\n')}`;
       }
+      onProgress?.({ label: 'Source Grounding', detail: `${chunks.length} excerpts found`, status: 'done' });
+    } else {
+      onProgress?.({ label: 'Source Grounding', detail: 'No embeddings available', status: 'done' });
     }
 
   } else {
-    // B. General Query — Hybrid Search + Deep Traversal + Source Grounding
+    // === GENERAL QUERY MODE: 7-Step Source-Aware Pipeline ===
 
-    // Step 1: Generate query embedding and extract keywords in parallel
-    const [queryEmbedding, searchTerms] = await Promise.all([
+    // Step 1: AI Query Understanding
+    onProgress?.({ label: 'Understanding Query', detail: 'Analyzing intent and entities...', status: 'active' });
+    const [queryAnalysis, queryEmbedding] = await Promise.all([
+      analyzeQuery(query),
       generateEmbedding(query),
-      generateSearchQueries(query),
     ]);
+    console.log('[RAG] Query analysis:', queryAnalysis);
+    onProgress?.({ label: 'Understanding Query', detail: `Intent: ${queryAnalysis.intent}, Entities: ${queryAnalysis.entities.join(', ') || 'none'}`, status: 'done' });
 
-    // Step 2: Hybrid search — keyword + semantic in parallel
-    console.log("Running hybrid search:", searchTerms);
-    const hybridResults = await hybridSearchNodes(searchTerms, queryEmbedding, {
+    // Step 2: Source-Level Search
+    let matchedSourceIds: string[] = [];
+    if (queryAnalysis.source_hint) {
+      onProgress?.({ label: 'Source Search', detail: `Looking for "${queryAnalysis.source_hint}"...`, status: 'active' });
+      const matchedSources = await searchSourcesByTitle(queryAnalysis.source_hint);
+      matchedSourceIds = matchedSources.map(s => s.id);
+      matchedSourceNames = matchedSources.map(s => s.title);
+      console.log('[RAG] Source matches:', matchedSources.map(s => `${s.title} (${s.id})`));
+      onProgress?.({ label: 'Source Search', detail: matchedSources.length > 0 ? `Found: ${matchedSourceNames.slice(0, 2).join(', ')}` : 'No matching sources', status: 'done' });
+    }
+
+    // Step 3: Hybrid Node Search with source boosting
+    onProgress?.({ label: 'Hybrid Search', detail: `Searching ${queryAnalysis.keywords.length} keywords + semantic...`, status: 'active' });
+    const hybridResults = await hybridSearchNodes(queryAnalysis.keywords, queryEmbedding, {
       keywordLimit: 20,
       semanticLimit: 20,
       semanticThreshold: 0.3,
+      boostSourceIds: matchedSourceIds,
     });
-    console.log("Hybrid search found:", hybridResults.length, "nodes");
+    console.log('[RAG] Hybrid search found:', hybridResults.length, 'nodes');
+    if (matchedSourceIds.length > 0) {
+      const boostedCount = hybridResults.filter(n => matchedSourceIds.includes(n.source_id)).length;
+      console.log('[RAG] Boosted nodes from matched sources:', boostedCount);
+    }
+    onProgress?.({ label: 'Hybrid Search', detail: `${hybridResults.length} nodes found`, status: 'done' });
 
     if (hybridResults.length === 0) {
+      onProgress?.({ label: 'Hybrid Search', detail: 'No matching nodes', status: 'error' });
       return {
         answer: "I scanned the knowledge graph but didn't find specific nodes matching your query. Try using different keywords or check if the topic exists in your knowledge base.",
       };
     }
 
-    // Step 3: Deep graph traversal from top seed nodes
+    // Step 4: Source Chunk Retrieval (parallel: global + targeted)
+    onProgress?.({ label: 'Source Chunks', detail: 'Retrieving source excerpts...', status: 'active' });
+    let allChunks: { content: string; source_id?: string }[] = [];
+    if (queryEmbedding.length > 0) {
+      const chunkPromises: Promise<any[]>[] = [
+        searchSourceChunks(queryEmbedding, 0.3, 5), // Global
+      ];
+      if (matchedSourceIds.length > 0) {
+        chunkPromises.push(searchSourceChunks(queryEmbedding, 0.2, 5, matchedSourceIds)); // Targeted (lower threshold)
+      }
+      const chunkResults = await Promise.all(chunkPromises);
+      // Merge and deduplicate by content
+      const seenContent = new Set<string>();
+      for (const chunks of chunkResults) {
+        for (const chunk of chunks) {
+          const key = chunk.content?.slice(0, 100);
+          if (key && !seenContent.has(key)) {
+            seenContent.add(key);
+            allChunks.push(chunk);
+          }
+        }
+      }
+    }
+    console.log('[RAG] Source chunks retrieved:', allChunks.length);
+    onProgress?.({ label: 'Source Chunks', detail: `${allChunks.length} excerpts retrieved`, status: 'done' });
+
+    // Step 5: Deep Graph Traversal
+    onProgress?.({ label: 'Graph Traversal', detail: 'Exploring multi-hop connections...', status: 'active' });
     const seedIds = hybridResults.slice(0, 6).map(n => n.id);
     const { nodes: graphNodes, edges: graphEdges, paths } = await deepGraphTraversal(seedIds, 2, 4);
-
     dataArtifacts = { nodes: graphNodes, edges: graphEdges };
+    console.log('[RAG] Deep traversal:', graphNodes.length, 'nodes,', graphEdges.length, 'edges,', paths.length, 'paths');
+    onProgress?.({ label: 'Graph Traversal', detail: `${graphNodes.length} nodes, ${paths.length} paths`, status: 'done' });
 
-    // Step 4: Fetch source chunks for grounding
+    // Step 6: Assemble Context
+    onProgress?.({ label: 'Synthesizing', detail: 'Building context for AI...', status: 'active' });
+
+    // Prioritize source-matched nodes at the top
+    const sourceMatchedNodes = hybridResults.filter(n => matchedSourceIds.includes(n.source_id));
+    const otherNodes = hybridResults.filter(n => !matchedSourceIds.includes(n.source_id));
+    const orderedNodes = [...sourceMatchedNodes, ...otherNodes].slice(0, 15);
+
     let sourceChunksText = "";
-    if (queryEmbedding.length > 0) {
-      const chunks = await searchSourceChunks(queryEmbedding, 0.3, 5);
-      if (chunks.length > 0) {
-        sourceChunksText = `\nSOURCE EXCERPTS (from original documents):\n${chunks.map(c => `[Source Chunk]: ${c.content}`).join('\n\n')}`;
+    if (allChunks.length > 0) {
+      // Separate targeted vs global chunks for clarity
+      const targetedChunks = matchedSourceIds.length > 0
+        ? allChunks.filter(c => c.source_id && matchedSourceIds.includes(c.source_id))
+        : [];
+      const globalChunks = allChunks.filter(c => !c.source_id || !matchedSourceIds.includes(c.source_id));
+
+      if (targetedChunks.length > 0) {
+        sourceChunksText += `\nMATCHED SOURCE EXCERPTS (from "${matchedSourceNames[0] || 'matched source'}"):\n${targetedChunks.map(c => `[Source]: ${c.content}`).join('\n\n')}`;
+      }
+      if (globalChunks.length > 0) {
+        sourceChunksText += `\nADDITIONAL SOURCE EXCERPTS:\n${globalChunks.map(c => `[Source]: ${c.content}`).join('\n\n')}`;
       }
     }
 
-    // Step 5: Build rich context
-    contextText = `
+    contextText = `${matchedSourceNames.length > 0 ? `MATCHED SOURCES: ${matchedSourceNames.join(', ')}\n` : ''}
 RELEVANT ENTITIES:
-${hybridResults.slice(0, 12).map(n => `- ${n.label} (${n.entity_type}): ${n.description || 'No description'}`).join('\n')}
+${orderedNodes.map(n => `- ${n.label} (${n.entity_type})${matchedSourceIds.includes(n.source_id) ? ' [FROM MATCHED SOURCE]' : ''}: ${n.description || 'No description'}`).join('\n')}
 
 GRAPH RELATIONSHIPS (multi-hop paths):
 ${paths.slice(0, 20).join('\n')}
@@ -1205,20 +1327,21 @@ ${sourceChunksText}
     conversationContext = `\nRECENT CONVERSATION:\n${conversationHistory.slice(-4).map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n')}\n`;
   }
 
-  // Synthesis
+  // Step 7: Synthesis
   const systemInstruction = `
 You are SYNAPSE, an AI interface for a personal Knowledge Graph.
 Answer based **strictly** on the provided GRAPH CONTEXT and SOURCE EXCERPTS.
 
 RULES:
-1. Use the GRAPH RELATIONSHIPS to explain connections, causes, and dependencies.
-2. Use SOURCE EXCERPTS to provide specific details, quotes, or evidence when available.
-3. If the conversation history provides context for the current question, use it to scope your answer.
-4. Cite entities as clickable references: [[Node Label]].
+1. PRIORITIZE information from MATCHED SOURCE EXCERPTS when the user asks about a specific source/meeting/video.
+2. Use GRAPH RELATIONSHIPS to explain connections, causes, and dependencies.
+3. Use SOURCE EXCERPTS to provide specific details, quotes, or evidence when available.
+4. If the conversation history provides context for the current question, use it to scope your answer.
+5. Cite entities as clickable references: [[Node Label]].
    Example: "[[Project Alpha]] is blocked by [[Budget Cuts]], which stems from [[Q3 Revenue Miss]]."
-5. Do NOT invent citations or information not in the context.
-6. If the context doesn't contain enough information, say so honestly.
-7. Return JSON with 'answer' key.
+6. Do NOT invent citations or information not in the context.
+7. If the context doesn't contain enough information, say so honestly.
+8. Return JSON with 'answer' key.
   `;
 
   const prompt = `QUERY: "${query}"\n${conversationContext}\nCONTEXT:\n${contextText}`;
@@ -1236,6 +1359,7 @@ RULES:
     });
 
     const parsed = cleanAndParseJSON(response.text || '{}');
+    onProgress?.({ label: 'Synthesizing', detail: 'Complete', status: 'done' });
     return {
       answer: parsed.answer || "Analysis complete.",
       nodes: dataArtifacts.nodes,
@@ -1243,6 +1367,7 @@ RULES:
     };
   } catch (error) {
     console.error("Graph RAG synthesis error:", error);
+    onProgress?.({ label: 'Synthesizing', detail: 'Error during synthesis', status: 'error' });
     return { answer: "I encountered an error querying the neural network." };
   }
 };

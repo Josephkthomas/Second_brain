@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, X, MessageSquare, Sparkles, Network, ArrowRight, Trash2, Box, ChevronRight, Scan, GitMerge } from 'lucide-react';
-import { queryGraphRAG } from '../services/gemini';
+import { Send, X, MessageSquare, Sparkles, Network, ArrowRight, Trash2, Box, ChevronRight, Scan, GitMerge, Check, Loader, AlertCircle } from 'lucide-react';
+import { queryGraphRAG, ProgressStep } from '../services/gemini';
 import { ChatMessage, GraphNode } from '../types';
 import { getEntityConfig } from '../utils/theme';
 import clsx from 'clsx';
@@ -24,6 +24,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [suggestionNode, setSuggestionNode] = useState<any | null>(null); // Node to potentially contextualize
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Handle Trace Trigger (External)
@@ -37,7 +38,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, loading, suggestionNode]); // Auto-scroll when suggestion appears too
+  }, [messages, loading, suggestionNode, progressSteps]); // Auto-scroll when suggestion/progress appears
 
   const handleReset = () => {
     setMessages([
@@ -51,9 +52,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     setSuggestionNode(null);
   };
 
+  // Progress callback — upserts steps by label
+  const createProgressCallback = () => (step: ProgressStep) => {
+    setProgressSteps(prev => {
+      const idx = prev.findIndex(s => s.label === step.label);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = step;
+        return updated;
+      }
+      return [...prev, step];
+    });
+  };
+
   const handleTrace = async (node: GraphNode) => {
     const traceId = Date.now().toString();
-    
+
     // Add User "System" Message
     const userMsg: ChatMessage = {
       id: traceId,
@@ -64,10 +78,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    setProgressSteps([]);
 
     try {
       const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
-      const response = await queryGraphRAG(`Trace the connections and impact of ${node.label}`, 'trace', node.id, history);
+      const response = await queryGraphRAG(`Trace the connections and impact of ${node.label}`, 'trace', node.id, history, createProgressCallback());
       
       const aiMsg: ChatMessage = {
         id: traceId + '_ai',
@@ -84,6 +99,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
       console.error(e);
     } finally {
       setLoading(false);
+      setProgressSteps([]);
     }
   };
 
@@ -101,6 +117,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    setProgressSteps([]);
 
     try {
       const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
@@ -108,7 +125,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
         `Contextualize "${node.label}" relative to our conversation.`,
         'trace',
         node.id,
-        history
+        history,
+        createProgressCallback()
       );
       
       const aiMsg: ChatMessage = {
@@ -132,6 +150,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
       } as ChatMessage]);
     } finally {
       setLoading(false);
+      setProgressSteps([]);
     }
   };
 
@@ -151,11 +170,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
     };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    setProgressSteps([]);
 
     try {
       // General RAG Query with conversation history
       const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
-      const response = await queryGraphRAG(userText, 'general', undefined, history);
+      const response = await queryGraphRAG(userText, 'general', undefined, history, createProgressCallback());
       
       const aiMsg: ChatMessage = {
         id: Date.now().toString() + '_ai',
@@ -178,6 +198,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
       } as ChatMessage]);
     } finally {
       setLoading(false);
+      setProgressSteps([]);
     }
   };
 
@@ -377,14 +398,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, t
           </div>
         ))}
         {loading && (
-           <div className="flex items-start gap-3">
-              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-3">
-                 <div className="flex gap-1">
-                    <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce"></div>
-                    <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce delay-100"></div>
-                    <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce delay-200"></div>
-                 </div>
-                 <span className="text-xs text-blue-300 uppercase tracking-wider">Analyzing Graph Topology...</span>
+           <div className="flex items-start">
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 min-w-[260px] max-w-[90%]">
+                 {progressSteps.length > 0 ? (
+                   <div className="space-y-2">
+                     {progressSteps.map((step, i) => (
+                       <div key={step.label} className="flex items-start gap-2.5">
+                         <div className="mt-0.5 shrink-0">
+                           {step.status === 'done' ? (
+                             <Check size={14} className="text-emerald-400" />
+                           ) : step.status === 'error' ? (
+                             <AlertCircle size={14} className="text-red-400" />
+                           ) : (
+                             <Loader size={14} className="text-cyan-400 animate-spin" />
+                           )}
+                         </div>
+                         <div className="min-w-0">
+                           <div className={clsx(
+                             "text-xs font-semibold",
+                             step.status === 'done' ? 'text-emerald-300' : step.status === 'error' ? 'text-red-300' : 'text-cyan-300'
+                           )}>
+                             {step.label}
+                           </div>
+                           <div className="text-[10px] text-slate-400 truncate">{step.detail}</div>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 ) : (
+                   <div className="flex items-center gap-3">
+                     <div className="flex gap-1">
+                       <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce"></div>
+                       <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                       <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                     </div>
+                     <span className="text-xs text-blue-300 uppercase tracking-wider">Initializing...</span>
+                   </div>
+                 )}
               </div>
            </div>
         )}
