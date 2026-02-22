@@ -26,6 +26,8 @@ function verifyCronAuth(req: VercelRequest): boolean {
   if (cronAuth === `Bearer ${CRON_SECRET}`) return true;
   const vercelSignature = req.headers['x-vercel-signature'];
   if (vercelSignature) return true;
+  const userAgent = req.headers['user-agent'] || '';
+  if (userAgent.includes('vercel-cron')) return true;
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ') && !CRON_SECRET) return true;
   return !CRON_SECRET;
@@ -479,7 +481,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST' && req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   // Try user auth first, then fall back to cron auth
   const { user, isCron } = await verifyUserAuth(req);
