@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Check, ExternalLink, CheckCircle, Loader2, Zap, Trash2, RefreshCw } from 'lucide-react';
+import { Copy, Check, ExternalLink, CheckCircle, Loader2, Zap, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
 import { createUserIntegration, buildWebhookUrl, deleteUserIntegration, regenerateWebhookToken } from '../../../services/integrations';
 import type { IntegrationDefinition } from '../../../config/integrations';
 import type { UserIntegration } from '../../../types/integrations';
@@ -26,6 +26,7 @@ export default function CirclebackSetup({
   const [loading, setLoading] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isConnected && userIntegration?.webhook_token) {
@@ -35,16 +36,24 @@ export default function CirclebackSetup({
 
   const handleGenerateUrl = async () => {
     setLoading(true);
-    const { data, error } = await createUserIntegration(
-      'circleback',
-      integration.defaultConfig,
-      true
-    );
-    if (data?.webhook_token) {
-      setWebhookUrl(buildWebhookUrl('circleback', data.webhook_token));
-      setStep(2);
-    } else {
-      console.error('Failed to create integration:', error);
+    setErrorMsg(null);
+    try {
+      const { data, error } = await createUserIntegration(
+        'circleback',
+        integration.defaultConfig,
+        true
+      );
+      if (data?.webhook_token) {
+        setWebhookUrl(buildWebhookUrl('circleback', data.webhook_token));
+        setStep(2);
+      } else {
+        const msg = error?.message || error?.toString() || 'Unknown error creating integration';
+        console.error('Failed to create integration:', error);
+        setErrorMsg(msg);
+      }
+    } catch (err: any) {
+      console.error('Integration creation threw:', err);
+      setErrorMsg(err?.message || 'Unexpected error');
     }
     setLoading(false);
   };
@@ -146,6 +155,13 @@ export default function CirclebackSetup({
           {loading ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
           {loading ? 'Generating...' : 'Generate my webhook URL'}
         </button>
+
+        {errorMsg && (
+          <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
+            <AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-400">{errorMsg}</p>
+          </div>
+        )}
       </div>
     );
   }
