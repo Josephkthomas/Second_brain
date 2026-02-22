@@ -46,13 +46,12 @@ const cleanAndParseJSON = (text: string) => {
 export const generateEmbedding = async (text: string): Promise<number[]> => {
   const ai = initGenAI();
   try {
-    // Note: Use text-embedding-004 for 768-dimensional vectors
-    // Correct parameter is 'contents' (plural), similar to generateContent
     const result = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-001',
       contents: text,
+      config: { outputDimensionality: 768 },
     });
-    return result.embedding?.values || [];
+    return (result as any).embedding?.values || result.embeddings?.[0]?.values || [];
   } catch (error) {
     console.error("Embedding generation failed:", error);
     return [];
