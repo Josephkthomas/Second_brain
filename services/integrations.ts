@@ -107,5 +107,6 @@ export async function regenerateWebhookToken(id: string): Promise<{ token: strin
 }
 
 export function buildWebhookUrl(slug: string, token: string): string {
-  return `https://second-brain-one-mocha.vercel.app/api/ingest/${slug}?token=${token}`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://second-brain-one-mocha.vercel.app';
+  return `${origin}/api/ingest/${slug}?token=${token}`;
 }

@@ -1,8 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { Copy, Check, ExternalLink, CheckCircle, Loader2, Zap, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Copy, Check, ExternalLink, CheckCircle, Loader2, Zap, Trash2, RefreshCw, AlertCircle, Clock, AlertTriangle } from 'lucide-react';
+import { useAuth } from '../../../contexts/AuthContext';
 import { createUserIntegration, buildWebhookUrl, deleteUserIntegration, regenerateWebhookToken } from '../../../services/integrations';
 import type { IntegrationDefinition } from '../../../config/integrations';
 import type { UserIntegration } from '../../../types/integrations';
+
+interface CirclebackActivityItem {
+  id: string;
+  title: string;
+  status: string;
+  source_type: string;
+  nodes_created: number;
+  edges_created: number;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
 
 interface CirclebackSetupProps {
   integration: IntegrationDefinition;
@@ -19,6 +32,7 @@ export default function CirclebackSetup({
   onSuccess,
   onDisconnect,
 }: CirclebackSetupProps) {
+  const { session } = useAuth();
   const isConnected = userIntegration?.status === 'active';
   const [step, setStep] = useState<Step>(isConnected ? 3 : 1);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -27,12 +41,44 @@ export default function CirclebackSetup({
   const [disconnecting, setDisconnecting] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activityItems, setActivityItems] = useState<CirclebackActivityItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
 
   useEffect(() => {
     if (isConnected && userIntegration?.webhook_token) {
       setWebhookUrl(buildWebhookUrl('circleback', userIntegration.webhook_token));
     }
   }, [isConnected, userIntegration]);
+
+  // Fetch Circleback activity from ingest_queue
+  const fetchActivity = useCallback(async () => {
+    if (!session?.access_token || !isConnected) return;
+    setActivityLoading(true);
+    try {
+      const response = await fetch('/api/ingest?limit=50', {
+        headers: { 'Authorization': `Bearer ${session.access_token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Filter to only Circleback items
+        const cbItems = (data.items || []).filter(
+          (item: any) => item.metadata?.ingestion_method === 'circleback_webhook'
+        );
+        setActivityItems(cbItems);
+      }
+    } catch (err) {
+      console.error('Failed to fetch activity:', err);
+    }
+    setActivityLoading(false);
+  }, [session?.access_token, isConnected]);
+
+  useEffect(() => {
+    if (isConnected) {
+      fetchActivity();
+      const interval = setInterval(fetchActivity, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isConnected, fetchActivity]);
 
   const handleGenerateUrl = async () => {
     setLoading(true);
@@ -84,8 +130,17 @@ export default function CirclebackSetup({
 
   // ── CONNECTED STATE ────────────────────────────────────────
   if (isConnected && step === 3 && userIntegration) {
+    const STATUS_COLORS: Record<string, string> = {
+      pending: 'text-amber-400',
+      extracting: 'text-cyan-400',
+      cross_connecting: 'text-indigo-400',
+      embedding: 'text-purple-400',
+      completed: 'text-emerald-400',
+      failed: 'text-red-400',
+    };
+
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         <div className="flex items-center gap-3 p-4 bg-emerald-900/20 border border-emerald-500/30 rounded-xl">
           <CheckCircle className="text-emerald-400 shrink-0" size={20} />
           <div>
@@ -108,6 +163,62 @@ export default function CirclebackSetup({
               {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
             </button>
           </div>
+          <p className="text-[10px] text-slate-600 mt-1">
+            Make sure this URL matches what's configured in Circleback. If you're on a preview deployment, update Circleback's webhook to use the preview URL.
+          </p>
+        </div>
+
+        {/* Activity Log */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Recent Activity</p>
+            <button onClick={fetchActivity} className="text-slate-500 hover:text-white transition-colors">
+              <RefreshCw size={12} className={activityLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {activityItems.length === 0 && !activityLoading ? (
+            <div className="p-4 bg-slate-800/50 border border-white/5 rounded-xl text-center">
+              <AlertTriangle size={16} className="text-amber-400 mx-auto mb-2" />
+              <p className="text-xs text-slate-400">No meetings received yet.</p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                Trigger a test from Circleback Automations, or wait for your next meeting to finish.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {activityItems.map(item => (
+                <div key={item.id} className="flex items-center gap-3 p-2.5 bg-slate-800/50 border border-white/5 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-white font-medium truncate">{item.title}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={`text-[10px] font-medium ${STATUS_COLORS[item.status] || 'text-slate-400'}`}>
+                        {item.status === 'completed' ? `${item.nodes_created} nodes, ${item.edges_created} edges` : item.status.replace('_', ' ')}
+                      </span>
+                      <span className="text-[10px] text-slate-600">
+                        {new Date(item.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {item.error_message && (
+                      <p className="text-[10px] text-red-400 mt-0.5 truncate">{item.error_message}</p>
+                    )}
+                  </div>
+                  {item.status === 'completed' && (
+                    <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+                  )}
+                  {(item.status === 'extracting' || item.status === 'cross_connecting' || item.status === 'embedding') && (
+                    <Loader2 size={14} className="text-cyan-400 shrink-0 animate-spin" />
+                  )}
+                  {item.status === 'pending' && (
+                    <Clock size={14} className="text-amber-400 shrink-0" />
+                  )}
+                  {item.status === 'failed' && (
+                    <AlertCircle size={14} className="text-red-400 shrink-0" />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Actions */}
