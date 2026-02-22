@@ -22,7 +22,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
       model: 'text-embedding-004',
       contents: text,
     });
-    return result.embeddings?.[0]?.values || [];
+    return (result as any).embedding?.values || result.embeddings?.[0]?.values || [];
   } catch (error) {
     console.error('Embedding generation failed:', error);
     return [];

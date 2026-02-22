@@ -664,7 +664,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   model: 'text-embedding-004',
                   contents: text,
                 });
-                const embedding = result.embeddings?.[0]?.values || [];
+                const embedding = (result as any).embedding?.values || result.embeddings?.[0]?.values || [];
 
                 if (embedding.length > 0) {
                   await supabase
