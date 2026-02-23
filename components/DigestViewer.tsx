@@ -184,7 +184,7 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
     if (state.status === 'delivered') return <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />;
     if (state.status === 'error') return (
       <span className="text-[10px] text-red-400 truncate max-w-[140px]" title={state.message}>
-        {state.message?.replace('failed: ', '').slice(0, 30) || 'Failed'}
+        {state.message?.slice(0, 30) || 'Failed'}
       </span>
     );
     return null;
@@ -259,7 +259,7 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
                   {state.status === 'delivered' && <span className="text-emerald-400 text-[10px]">Sent</span>}
                   {state.status === 'error' && (
                     <span className="text-red-400 text-[10px] truncate max-w-[120px]" title={state.message}>
-                      {state.message?.replace('failed: ', '').slice(0, 25) || 'Failed'}
+                      {state.message?.slice(0, 25) || 'Failed'}
                     </span>
                   )}
                 </div>

@@ -107,8 +107,16 @@ async function sendEmail(to: string, subject: string, html: string): Promise<{ s
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      return { success: false, error: `Resend API error: ${err}` };
+      const errBody = await response.text();
+      console.error('Resend API error:', response.status, errBody);
+      // Parse Resend's JSON error for a human-readable message
+      try {
+        const parsed = JSON.parse(errBody);
+        const msg = parsed.message || parsed.name || errBody;
+        return { success: false, error: msg };
+      } catch {
+        return { success: false, error: `Resend error (${response.status})` };
+      }
     }
 
     return { success: true };
@@ -277,7 +285,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { success, error } = await sendEmail(adHocEmail, subject, html);
       return res.status(200).json({
         success,
-        results: { email: success ? 'delivered' : `failed: ${error}` },
+        results: { email: success ? 'delivered' : (error || 'Send failed') },
       });
     }
 
@@ -312,7 +320,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           results.email = 'delivered';
           if (!deliveredChannels.includes('email')) deliveredChannels.push('email');
         } else {
-          results.email = `failed: ${error}`;
+          results.email = error || 'Send failed';
         }
       }
 
@@ -331,7 +339,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           results.telegram = 'delivered';
           if (!deliveredChannels.includes('telegram')) deliveredChannels.push('telegram');
         } else {
-          results.telegram = `failed: ${error}`;
+          results.telegram = error || 'Send failed';
         }
       }
 
@@ -349,7 +357,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           results.slack = 'delivered';
           if (!deliveredChannels.includes('slack')) deliveredChannels.push('slack');
         } else {
-          results.slack = `failed: ${error}`;
+          results.slack = error || 'Send failed';
         }
       }
     }
