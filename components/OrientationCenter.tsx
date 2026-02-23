@@ -4,6 +4,7 @@ import {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
   Sparkles, Clock, Play, Trash2, ToggleLeft, ToggleRight, GripVertical,
   Mail, Send, History, Settings2, ArrowUp, ArrowDown, Eye,
+  Brain, Database, Cpu, CheckCircle2, XCircle, Loader2, Zap, BarChart3,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -16,6 +17,7 @@ import { getDigestTemplate, DIGEST_TEMPLATES } from '../config/digestTemplates';
 import { DigestTemplateSelector } from './DigestTemplateSelector';
 import { DigestViewer } from './DigestViewer';
 import { generateDigest } from '../services/digestAgents';
+import type { GenerationProgress, AgentProgressStep } from '../services/digestAgents';
 import type {
   DigestProfile, DigestModule, DigestChannel, DigestHistoryEntry,
   ScheduleFrequency, DensityLevel, DigestScope,
@@ -38,7 +40,7 @@ interface Props {
   onClose: () => void;
 }
 
-type View = 'list' | 'editor' | 'history_detail';
+type View = 'list' | 'editor' | 'history_detail' | 'generating';
 
 export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
   // Navigation
@@ -58,7 +60,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
 
   // Generation state
   const [generating, setGenerating] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState<{ module: string; status: string; index: number; total: number } | null>(null);
+  const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [previewResult, setPreviewResult] = useState<DigestHistoryEntry | null>(null);
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<DigestHistoryEntry | null>(null);
 
@@ -239,21 +241,25 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     setGenerating(true);
     setGenerationProgress(null);
     setPreviewResult(null);
+    setView('generating');
     try {
-      const result = await generateDigest(profileId, (step) => {
-        setGenerationProgress(step);
+      const result = await generateDigest(profileId, (progress) => {
+        setGenerationProgress(progress);
       });
       if (result) {
         setPreviewResult(result);
-        setView('history_detail');
         setSelectedHistoryEntry(result);
-        await loadProfiles(); // Refresh history
+        // Brief pause so user can see the complete state
+        await new Promise(r => setTimeout(r, 800));
+        setView('history_detail');
+        await loadProfiles();
+      } else {
+        // Failed — stay on generation screen to show errors
       }
     } catch (error) {
       console.error('Generation failed:', error);
     } finally {
       setGenerating(false);
-      setGenerationProgress(null);
     }
   };
 
@@ -357,22 +363,6 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
           Configure intelligence briefings that synthesise your knowledge graph into actionable digests, delivered on your schedule.
         </p>
       </div>
-
-      {/* Generation Progress */}
-      {generating && generationProgress && (
-        <div className="p-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5">
-          <div className="flex items-center gap-3">
-            <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-            <div>
-              <p className="text-xs font-medium text-cyan-400">Generating digest...</p>
-              <p className="text-[10px] text-slate-500">
-                {generationProgress.status === 'running' ? 'Running' : 'Completed'}: {generationProgress.module}
-                {' '}({generationProgress.index + 1}/{generationProgress.total})
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Create New */}
       <button
@@ -856,12 +846,218 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     </div>
   );
 
+  // ─── Generating View (Smart Loading Screen) ─────────────
+
+  const PHASE_ICONS: Record<string, React.ComponentType<any>> = {
+    init: Settings2,
+    gathering: Database,
+    sub_agent: Brain,
+    meta_agent: Zap,
+    saving: CheckCircle2,
+    complete: CheckCircle2,
+    error: XCircle,
+  };
+
+  const renderGeneratingView = () => {
+    const progress = generationProgress;
+    const elapsed = progress ? progress.elapsedMs : 0;
+    const formatTime = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+
+    // Count completed / total steps
+    const allSteps = progress?.steps || [];
+    const completedSteps = allSteps.filter(s => s.status === 'complete').length;
+    const totalSteps = allSteps.length;
+    const progressPct = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="text-center pt-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500/20 to-violet-500/20 border border-cyan-500/20 mb-4">
+            {progress?.phase === 'complete' ? (
+              <CheckCircle2 size={28} className="text-emerald-400" />
+            ) : progress?.phase === 'error' ? (
+              <XCircle size={28} className="text-red-400" />
+            ) : (
+              <Cpu size={28} className="text-cyan-400 animate-pulse" />
+            )}
+          </div>
+          <h1 className="text-lg font-bold text-white">
+            {progress?.phase === 'complete' ? 'Digest Ready' :
+             progress?.phase === 'error' ? 'Generation Failed' :
+             'Generating Intelligence Briefing'}
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {progress?.overallStatus || 'Preparing...'}
+          </p>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[10px] text-slate-500">
+            <span>{completedSteps} of {totalSteps} steps complete</span>
+            <span>{formatTime(elapsed)}</span>
+          </div>
+          <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div
+              className={clsx(
+                "h-full rounded-full transition-all duration-500 ease-out",
+                progress?.phase === 'complete' ? "bg-emerald-500" :
+                progress?.phase === 'error' ? "bg-red-500" :
+                "bg-gradient-to-r from-cyan-500 to-violet-500"
+              )}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Graph Stats */}
+        {progress?.graphStats && (
+          <div className="flex items-center justify-center gap-6 py-3 px-4 rounded-lg bg-white/[0.02] border border-white/5">
+            <div className="flex items-center gap-2">
+              <Database size={12} className="text-cyan-500" />
+              <span className="text-xs text-slate-400">
+                <span className="text-white font-semibold">{progress.graphStats.nodes}</span> nodes
+              </span>
+            </div>
+            <div className="w-px h-4 bg-white/10" />
+            <div className="flex items-center gap-2">
+              <BarChart3 size={12} className="text-violet-500" />
+              <span className="text-xs text-slate-400">
+                <span className="text-white font-semibold">{progress.graphStats.edges}</span> edges
+              </span>
+            </div>
+            <div className="w-px h-4 bg-white/10" />
+            <div className="flex items-center gap-2">
+              <Compass size={12} className="text-amber-500" />
+              <span className="text-xs text-slate-400">
+                <span className="text-white font-semibold">{progress.graphStats.anchors}</span> anchors
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Step-by-Step Pipeline */}
+        <div className="space-y-1">
+          {allSteps.map((step, idx) => {
+            const StepIcon = step.phase === 'sub_agent'
+              ? (step.module ? (ICON_MAP[getDigestTemplate(
+                  // Try to find the matching template icon
+                  allSteps.filter(s => s.phase === 'sub_agent').findIndex(s => s === step) < (progress?.steps.filter(s => s.phase === 'sub_agent').length || 0)
+                    ? '' : ''
+                )?.iconName || ''] || Brain) : Brain)
+              : (PHASE_ICONS[step.phase] || Sparkles);
+
+            const duration = step.startedAt && step.completedAt
+              ? formatTime(step.completedAt - step.startedAt)
+              : null;
+
+            return (
+              <div
+                key={idx}
+                className={clsx(
+                  "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300",
+                  step.status === 'running' && "bg-cyan-500/5 border border-cyan-500/20",
+                  step.status === 'complete' && "bg-white/[0.01] border border-transparent",
+                  step.status === 'error' && "bg-red-500/5 border border-red-500/20",
+                  step.status === 'pending' && "opacity-40 border border-transparent",
+                )}
+              >
+                {/* Status Icon */}
+                <div className="shrink-0 w-7 h-7 flex items-center justify-center rounded-full">
+                  {step.status === 'running' ? (
+                    <Loader2 size={16} className="text-cyan-400 animate-spin" />
+                  ) : step.status === 'complete' ? (
+                    <CheckCircle2 size={16} className="text-emerald-500" />
+                  ) : step.status === 'error' ? (
+                    <XCircle size={16} className="text-red-400" />
+                  ) : (
+                    <div className="w-2 h-2 rounded-full bg-slate-700" />
+                  )}
+                </div>
+
+                {/* Step Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={clsx(
+                      "text-xs font-medium",
+                      step.status === 'running' ? "text-cyan-400" :
+                      step.status === 'complete' ? "text-slate-300" :
+                      step.status === 'error' ? "text-red-400" :
+                      "text-slate-600"
+                    )}>
+                      {step.module || (step.phase === 'init' ? 'Initialising' : step.phase === 'gathering' ? 'Scanning Graph' : step.phase)}
+                    </span>
+                    {step.phase === 'sub_agent' && (
+                      <span className="text-[10px] text-slate-700 bg-white/5 px-1 rounded">agent</span>
+                    )}
+                    {step.phase === 'meta_agent' && (
+                      <span className="text-[10px] text-violet-500/60 bg-violet-500/10 px-1 rounded">synthesis</span>
+                    )}
+                  </div>
+                  {step.detail && (
+                    <p className={clsx(
+                      "text-[11px] mt-0.5 truncate",
+                      step.status === 'error' ? "text-red-400/60" : "text-slate-600"
+                    )}>
+                      {step.detail}
+                    </p>
+                  )}
+                </div>
+
+                {/* Duration */}
+                {duration && (
+                  <span className="text-[10px] text-slate-700 shrink-0 tabular-nums">
+                    {duration}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Fallback: if no steps yet, show pulsing placeholder */}
+        {allSteps.length === 0 && (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs text-slate-500">Preparing generation pipeline...</p>
+          </div>
+        )}
+
+        {/* Action buttons at bottom */}
+        {(progress?.phase === 'complete' || progress?.phase === 'error') && (
+          <div className="flex items-center justify-center gap-3 pt-4">
+            {progress.phase === 'complete' && previewResult && (
+              <button
+                onClick={() => {
+                  setSelectedHistoryEntry(previewResult);
+                  setView('history_detail');
+                }}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-black shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all"
+              >
+                <Eye size={14} />
+                View Digest
+              </button>
+            )}
+            <button
+              onClick={() => { setView('list'); setGenerationProgress(null); }}
+              className="px-4 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 transition-colors"
+            >
+              Back to Digests
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // ─── Main Render ──────────────────────────────────────────
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-200 p-8 overflow-y-auto">
       <div className="max-w-3xl mx-auto w-full">
         {view === 'list' && renderListView()}
         {view === 'editor' && renderEditorView()}
+        {view === 'generating' && renderGeneratingView()}
         {view === 'history_detail' && selectedHistoryEntry && (
           <div className="space-y-6">
             <div className="flex items-center gap-3">
@@ -872,7 +1068,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                 <ChevronLeft size={18} />
               </button>
               <div>
-                <h1 className="text-lg font-bold text-white">Digest Result</h1>
+                <h1 className="text-lg font-bold text-white">Intelligence Briefing</h1>
                 <p className="text-xs text-slate-500">
                   Generated {new Date(selectedHistoryEntry.delivered_at).toLocaleString()}
                 </p>

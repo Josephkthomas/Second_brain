@@ -5,7 +5,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -114,15 +114,28 @@ ${nodeSummary || '(None)'}
 === RECENT EDGES (${graphContext.edges.length}) ===
 ${edgeSummary || '(None)'}
 
-Respond with JSON: {"content":"markdown analysis","highlights":["point1","point2"],"entities_referenced":[]}`;
+Provide your analysis as structured JSON. The "content" field should be your full markdown-formatted analysis. The "highlights" should be 3-5 concise key bullet points.`;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
-      config: { temperature: 0.3, maxOutputTokens: 2000 },
+      config: {
+        temperature: 0.3,
+        maxOutputTokens: 4000,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            content: { type: Type.STRING },
+            highlights: { type: Type.ARRAY, items: { type: Type.STRING } },
+            entities_referenced: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ['content', 'highlights'],
+        },
+      },
     });
-    const parsed = cleanAndParseJSON(response.text || '');
+    const parsed = JSON.parse(response.text || '{}');
     return {
       module_id: mod.id,
       module_name: tmpl?.name || mod.custom_name || 'Custom',
@@ -160,16 +173,39 @@ ${summaries}
 
 Frequency: ${frequency} | Density: ${density}
 
-Respond with JSON:
-{"executive_summary":"2-4 sentence synthesis","suggested_next_steps":[{"action":"...","rationale":"...","priority":"high|medium|low","related_entities":[]}]}`;
+Write a 2-4 sentence executive summary and derive 3-5 concrete next-step actions.`;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
-      config: { temperature: 0.3, maxOutputTokens: 1500 },
+      config: {
+        temperature: 0.3,
+        maxOutputTokens: 2000,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            executive_summary: { type: Type.STRING },
+            suggested_next_steps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  action: { type: Type.STRING },
+                  rationale: { type: Type.STRING },
+                  priority: { type: Type.STRING },
+                  related_entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ['action', 'rationale', 'priority'],
+              },
+            },
+          },
+          required: ['executive_summary', 'suggested_next_steps'],
+        },
+      },
     });
-    return cleanAndParseJSON(response.text || '');
+    return JSON.parse(response.text || '{}');
   } catch {
     return { executive_summary: 'Unable to generate summary.', suggested_next_steps: [] };
   }

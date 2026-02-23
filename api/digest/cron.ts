@@ -4,7 +4,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -149,15 +149,28 @@ async function generateDigestForProfile(supabase: any, profile: any): Promise<bo
         `- [${n.entity_type}] ${n.label}`
       ).join('\n');
 
-      const prompt = `${sysPrompt}\n\nPeriod: ${timeRange.from.slice(0, 10)} to ${timeRange.to.slice(0, 10)} | ${profile.frequency} | ${profile.density}\n\nAnchors:\n${graphContext.anchors.map((a: any) => `- ${a.label}`).join('\n') || '(None)'}\n\nNodes (${graphContext.nodes.length}):\n${nodeSummary || '(None)'}\n\nRespond JSON: {"content":"markdown","highlights":["..."],"entities_referenced":[]}`;
+      const prompt = `${sysPrompt}\n\nPeriod: ${timeRange.from.slice(0, 10)} to ${timeRange.to.slice(0, 10)} | ${profile.frequency} | ${profile.density}\n\nAnchors:\n${graphContext.anchors.map((a: any) => `- ${a.label}`).join('\n') || '(None)'}\n\nNodes (${graphContext.nodes.length}):\n${nodeSummary || '(None)'}\n\nProvide your analysis as structured JSON with content, highlights, and entities_referenced fields.`;
 
       try {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
           contents: prompt,
-          config: { temperature: 0.3, maxOutputTokens: 1500 },
+          config: {
+            temperature: 0.3,
+            maxOutputTokens: 4000,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                content: { type: Type.STRING },
+                highlights: { type: Type.ARRAY, items: { type: Type.STRING } },
+                entities_referenced: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ['content', 'highlights'],
+            },
+          },
         });
-        const parsed = cleanAndParseJSON(response.text || '');
+        const parsed = JSON.parse(response.text || '{}');
         moduleOutputs.push({
           module_id: mod.id,
           module_name: tmpl?.name || mod.custom_name || 'Custom',
@@ -186,10 +199,34 @@ async function generateDigestForProfile(supabase: any, profile: any): Promise<bo
     try {
       const metaResponse = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Synthesise these module outputs into a 2-4 sentence executive summary and 3-5 next steps.\n\n${summaries}\n\nJSON: {"executive_summary":"...","suggested_next_steps":[{"action":"...","rationale":"...","priority":"high|medium|low","related_entities":[]}]}`,
-        config: { temperature: 0.3, maxOutputTokens: 1000 },
+        contents: `Synthesise these module outputs into a 2-4 sentence executive summary and 3-5 next steps.\n\n${summaries}`,
+        config: {
+          temperature: 0.3,
+          maxOutputTokens: 2000,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              executive_summary: { type: Type.STRING },
+              suggested_next_steps: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    action: { type: Type.STRING },
+                    rationale: { type: Type.STRING },
+                    priority: { type: Type.STRING },
+                    related_entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  },
+                  required: ['action', 'rationale', 'priority'],
+                },
+              },
+            },
+            required: ['executive_summary', 'suggested_next_steps'],
+          },
+        },
       });
-      meta = cleanAndParseJSON(metaResponse.text || '');
+      meta = JSON.parse(metaResponse.text || '{}');
     } catch {}
 
     // Save

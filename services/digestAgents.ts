@@ -1,8 +1,8 @@
 // Orientation Engine — Digest Generation Service
 // Orchestrates sub-agents and meta-agent to generate composable intelligence digests.
 
-import { GoogleGenAI } from '@google/genai';
-import { getSupabase, getCurrentUserId, fetchAnchors, fetchExistingNodes } from './supabase';
+import { GoogleGenAI, Type } from '@google/genai';
+import { getSupabase, getCurrentUserId, fetchAnchors } from './supabase';
 import { fetchDigestProfile, fetchDigestHistory, saveDigestResult, updateDigestHistoryStatus } from './digest';
 import { getDigestTemplate, type DigestTemplateDefinition } from '../config/digestTemplates';
 import type {
@@ -16,20 +16,30 @@ const initGenAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-const cleanAndParseJSON = (text: string) => {
-  if (!text) return {};
-  let clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-  try {
-    return JSON.parse(clean);
-  } catch (e) {
-    const start = clean.indexOf('{');
-    const end = clean.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) {
-      try { return JSON.parse(clean.substring(start, end + 1)); } catch {}
-    }
-    throw new Error(`JSON Parse Error: ${(e as Error).message}`);
-  }
-};
+// ─── Progress Types ─────────────────────────────────────────
+
+export type AgentPhase = 'init' | 'gathering' | 'sub_agent' | 'meta_agent' | 'saving' | 'complete' | 'error';
+
+export interface AgentProgressStep {
+  phase: AgentPhase;
+  module?: string;
+  moduleIndex?: number;
+  totalModules?: number;
+  status: 'pending' | 'running' | 'complete' | 'error';
+  detail?: string;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
+export interface GenerationProgress {
+  phase: AgentPhase;
+  overallStatus: string;
+  steps: AgentProgressStep[];
+  graphStats?: { nodes: number; edges: number; anchors: number };
+  startedAt: number;
+  elapsedMs: number;
+}
 
 // ─── Time Range Helpers ─────────────────────────────────────
 
@@ -53,10 +63,8 @@ async function gatherGraphContext(
 ): Promise<{ nodes: any[]; edges: any[]; anchors: any[] }> {
   const client = getSupabase();
 
-  // Fetch anchors
   const anchors = await fetchAnchors();
 
-  // Fetch recent nodes
   let nodesQuery = client
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, source, source_type, is_anchor, created_at')
@@ -73,7 +81,6 @@ async function gatherGraphContext(
   const { data: nodes, error: nodesError } = await nodesQuery;
   if (nodesError) console.error('Error fetching nodes for digest:', nodesError);
 
-  // Fetch recent edges
   const { data: edges, error: edgesError } = await client
     .from('knowledge_edges')
     .select('id, source_node_id, target_node_id, relation_type, evidence, created_at')
@@ -104,7 +111,6 @@ async function executeSubAgent(
 ): Promise<DigestModuleOutput> {
   const ai = initGenAI();
 
-  // Build system prompt
   let systemPrompt = template?.systemPrompt || module.custom_system_prompt || 'Analyse the provided knowledge graph data and produce a useful summary.';
   if (module.user_context) {
     systemPrompt += `\n\nAdditional user instructions: ${module.user_context}`;
@@ -113,9 +119,8 @@ async function executeSubAgent(
   const moduleName = template?.name || module.custom_name || 'Custom Module';
   const moduleIcon = template?.iconName || 'Sparkles';
 
-  // Summarise graph data for the prompt (avoid token overflow)
   const nodeSummary = graphContext.nodes.slice(0, 100).map(n =>
-    `- [${n.entity_type}] ${n.label}${n.description ? `: ${n.description.slice(0, 100)}` : ''} (id: ${n.id.slice(0, 8)})`
+    `- [${n.entity_type}] ${n.label}${n.description ? `: ${n.description.slice(0, 100)}` : ''}`
   ).join('\n');
 
   const edgeSummary = graphContext.edges.slice(0, 80).map(e =>
@@ -142,15 +147,7 @@ ${nodeSummary || '(No nodes in this period)'}
 === RECENT EDGES (${graphContext.edges.length} total) ===
 ${edgeSummary || '(No edges in this period)'}
 
-=== INSTRUCTIONS ===
-Respond with valid JSON only:
-{
-  "content": "Your markdown-formatted analysis here",
-  "highlights": ["Key bullet point 1", "Key bullet point 2", "Key bullet point 3"],
-  "entities_referenced": ["node_id_1", "node_id_2"]
-}
-
-If there is insufficient data for a meaningful analysis, say so honestly and suggest what kinds of knowledge would help.`;
+Provide your analysis as structured JSON. The "content" field should be your full markdown-formatted analysis. The "highlights" should be 3-5 concise key bullet points summarising the most important findings. If there is insufficient data, explain what kinds of knowledge would help.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -158,12 +155,29 @@ If there is insufficient data for a meaningful analysis, say so honestly and sug
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 2000,
+        maxOutputTokens: 4000,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            content: { type: Type.STRING, description: 'Full markdown-formatted analysis' },
+            highlights: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: '3-5 concise key bullet points',
+            },
+            entities_referenced: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'Node IDs referenced in analysis',
+            },
+          },
+          required: ['content', 'highlights'],
+        },
       },
     });
 
-    const text = response.text || '';
-    const parsed = cleanAndParseJSON(text);
+    const parsed = JSON.parse(response.text || '{}');
 
     return {
       module_id: module.id,
@@ -195,23 +209,6 @@ If there is insufficient data for a meaningful analysis, say so honestly and sug
 
 // ─── Meta-Agent Synthesis ───────────────────────────────────
 
-const META_AGENT_PROMPT = `You are the Synapse Orientation Meta-Agent. You synthesise multiple intelligence module outputs into a coherent briefing.
-
-You will receive outputs from sub-agents. Your tasks:
-
-1. EXECUTIVE SUMMARY: Write a 2-4 sentence overview capturing the single most important insight across all modules. Synthesise across modules — do not simply list what each found.
-
-2. SUGGESTED NEXT STEPS: Derive 3-5 concrete, specific actions from the module outputs. Each should have an action, rationale, and priority (high/medium/low).
-
-Respond with valid JSON only:
-{
-  "executive_summary": "Your 2-4 sentence synthesis here",
-  "suggested_next_steps": [
-    {"action": "Do X", "rationale": "Because Y", "priority": "high", "related_entities": []},
-    {"action": "Do Z", "rationale": "Because W", "priority": "medium", "related_entities": []}
-  ]
-}`;
-
 async function runMetaAgent(
   moduleOutputs: DigestModuleOutput[],
   frequency: ScheduleFrequency,
@@ -228,7 +225,7 @@ async function runMetaAgent(
     `[${h.delivered_at?.slice(0, 10)}] ${h.content?.executive_summary || 'No summary'}`
   ).join('\n');
 
-  const prompt = `${META_AGENT_PROMPT}
+  const prompt = `You synthesise intelligence module outputs into a coherent briefing.
 
 === MODULE OUTPUTS ===
 ${modulesSummary}
@@ -237,7 +234,9 @@ ${modulesSummary}
 ${historySummary || '(No previous digests)'}
 
 Digest frequency: ${frequency}
-Density: ${density}`;
+Density: ${density}
+
+Write a 2-4 sentence executive summary capturing the single most important insight across all modules. Then derive 3-5 concrete, specific next-step actions.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -245,12 +244,32 @@ Density: ${density}`;
       contents: prompt,
       config: {
         temperature: 0.3,
-        maxOutputTokens: 1500,
+        maxOutputTokens: 2000,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            executive_summary: { type: Type.STRING, description: '2-4 sentence synthesis' },
+            suggested_next_steps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  action: { type: Type.STRING },
+                  rationale: { type: Type.STRING },
+                  priority: { type: Type.STRING, description: 'high, medium, or low' },
+                  related_entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ['action', 'rationale', 'priority'],
+              },
+            },
+          },
+          required: ['executive_summary', 'suggested_next_steps'],
+        },
       },
     });
 
-    const text = response.text || '';
-    const parsed = cleanAndParseJSON(text);
+    const parsed = JSON.parse(response.text || '{}');
 
     return {
       executive_summary: parsed.executive_summary || 'Digest generated successfully.',
@@ -269,11 +288,26 @@ Density: ${density}`;
 
 export async function generateDigest(
   profileId: string,
-  onProgress?: (step: { module: string; status: string; index: number; total: number }) => void
+  onProgress?: (progress: GenerationProgress) => void
 ): Promise<DigestHistoryEntry | null> {
   const startTime = Date.now();
+  const steps: AgentProgressStep[] = [];
 
-  // Load profile
+  const emitProgress = (phase: AgentPhase, overallStatus: string, graphStats?: { nodes: number; edges: number; anchors: number }) => {
+    onProgress?.({
+      phase,
+      overallStatus,
+      steps: [...steps],
+      graphStats,
+      startedAt: startTime,
+      elapsedMs: Date.now() - startTime,
+    });
+  };
+
+  // Phase: Init
+  steps.push({ phase: 'init', status: 'running', detail: 'Loading digest profile configuration...', startedAt: Date.now() });
+  emitProgress('init', 'Initialising digest generation...');
+
   const profile = await fetchDigestProfile(profileId);
   if (!profile) {
     console.error('Digest profile not found:', profileId);
@@ -292,7 +326,42 @@ export async function generateDigest(
     return null;
   }
 
-  // Create initial history entry
+  steps[0].status = 'complete';
+  steps[0].completedAt = Date.now();
+  steps[0].detail = `Loaded "${profile.name}" with ${activeModules.length} active modules`;
+
+  // Pre-populate sub-agent steps
+  for (let i = 0; i < activeModules.length; i++) {
+    const mod = activeModules[i];
+    const template = mod.template_id ? getDigestTemplate(mod.template_id) || null : null;
+    steps.push({
+      phase: 'sub_agent',
+      module: template?.name || mod.custom_name || 'Custom Module',
+      moduleIndex: i,
+      totalModules: activeModules.length,
+      status: 'pending',
+      detail: 'Waiting...',
+    });
+  }
+  // Meta-agent step
+  steps.push({
+    phase: 'meta_agent',
+    module: 'Executive Synthesis',
+    status: 'pending',
+    detail: 'Waiting for sub-agents to complete...',
+  });
+  // Saving step
+  steps.push({
+    phase: 'saving',
+    module: 'Finalising',
+    status: 'pending',
+    detail: 'Waiting...',
+  });
+
+  // Phase: Gather graph data
+  steps.push({ phase: 'gathering', status: 'running', detail: 'Scanning knowledge graph for recent activity...', startedAt: Date.now() });
+  emitProgress('gathering', 'Scanning your knowledge graph...');
+
   const { data: historyEntry } = await saveDigestResult({
     digest_profile_id: profileId,
     content: {},
@@ -302,22 +371,38 @@ export async function generateDigest(
 
   try {
     const timeRange = getTimeRange(profile.frequency);
-
-    // Gather graph context
     const graphContext = await gatherGraphContext(userId, timeRange);
 
-    // Execute sub-agents
+    const graphStats = {
+      nodes: graphContext.nodes.length,
+      edges: graphContext.edges.length,
+      anchors: graphContext.anchors.length,
+    };
+
+    // Update gathering step
+    const gatherIdx = steps.findIndex(s => s.phase === 'gathering');
+    if (gatherIdx >= 0) {
+      steps[gatherIdx].status = 'complete';
+      steps[gatherIdx].completedAt = Date.now();
+      steps[gatherIdx].detail = `Found ${graphStats.nodes} nodes, ${graphStats.edges} edges, ${graphStats.anchors} anchors`;
+    }
+
+    emitProgress('sub_agent', 'Running intelligence sub-agents...', graphStats);
+
+    // Phase: Execute sub-agents
     const moduleOutputs: DigestModuleOutput[] = [];
     for (let i = 0; i < activeModules.length; i++) {
       const mod = activeModules[i];
       const template = mod.template_id ? getDigestTemplate(mod.template_id) || null : null;
+      const stepIdx = steps.findIndex(s => s.phase === 'sub_agent' && s.moduleIndex === i);
 
-      onProgress?.({
-        module: template?.name || mod.custom_name || 'Module',
-        status: 'running',
-        index: i,
-        total: activeModules.length,
-      });
+      // Mark running
+      if (stepIdx >= 0) {
+        steps[stepIdx].status = 'running';
+        steps[stepIdx].startedAt = Date.now();
+        steps[stepIdx].detail = `Analysing graph data through ${template?.name || 'custom'} lens...`;
+      }
+      emitProgress('sub_agent', `Running ${template?.name || mod.custom_name || 'Module'} agent...`, graphStats);
 
       const output = await executeSubAgent(
         mod, template, graphContext,
@@ -325,25 +410,48 @@ export async function generateDigest(
       );
       moduleOutputs.push(output);
 
-      onProgress?.({
-        module: template?.name || mod.custom_name || 'Module',
-        status: 'complete',
-        index: i,
-        total: activeModules.length,
-      });
+      // Mark complete
+      if (stepIdx >= 0) {
+        const hasError = output.content.startsWith('Error');
+        steps[stepIdx].status = hasError ? 'error' : 'complete';
+        steps[stepIdx].completedAt = Date.now();
+        steps[stepIdx].detail = hasError
+          ? output.content
+          : `Generated ${output.highlights.length} highlights`;
+        if (hasError) steps[stepIdx].error = output.content;
+      }
+      emitProgress('sub_agent', `Completed ${template?.name || mod.custom_name || 'Module'}`, graphStats);
     }
 
-    // Run meta-agent synthesis
-    onProgress?.({ module: 'Executive Summary', status: 'running', index: activeModules.length, total: activeModules.length + 1 });
+    // Phase: Meta-agent
+    const metaIdx = steps.findIndex(s => s.phase === 'meta_agent');
+    if (metaIdx >= 0) {
+      steps[metaIdx].status = 'running';
+      steps[metaIdx].startedAt = Date.now();
+      steps[metaIdx].detail = 'Synthesising insights across all modules...';
+    }
+    emitProgress('meta_agent', 'Synthesising executive summary...', graphStats);
 
     const recentHistory = await fetchDigestHistory(undefined, 5);
     const { executive_summary, suggested_next_steps } = await runMetaAgent(
       moduleOutputs, profile.frequency, profile.density, recentHistory
     );
 
-    onProgress?.({ module: 'Executive Summary', status: 'complete', index: activeModules.length, total: activeModules.length + 1 });
+    if (metaIdx >= 0) {
+      steps[metaIdx].status = 'complete';
+      steps[metaIdx].completedAt = Date.now();
+      steps[metaIdx].detail = `Generated summary with ${suggested_next_steps.length} action items`;
+    }
 
-    // Build final digest output
+    // Phase: Save
+    const saveIdx = steps.findIndex(s => s.phase === 'saving');
+    if (saveIdx >= 0) {
+      steps[saveIdx].status = 'running';
+      steps[saveIdx].startedAt = Date.now();
+      steps[saveIdx].detail = 'Saving digest to history...';
+    }
+    emitProgress('saving', 'Saving digest...', graphStats);
+
     const digestOutput: DigestOutput = {
       generated_at: new Date().toISOString(),
       digest_profile_id: profileId,
@@ -369,13 +477,11 @@ export async function generateDigest(
 
     const generationTime = Date.now() - startTime;
 
-    // Update history entry
     if (historyEntry) {
       await updateDigestHistoryStatus(historyEntry.id, {
         status: 'completed',
         channels_delivered: ['in_app'],
       });
-      // Update the full content via direct update
       const client = getSupabase();
       await client
         .from('digest_history')
@@ -389,6 +495,13 @@ export async function generateDigest(
         .eq('id', historyEntry.id);
     }
 
+    if (saveIdx >= 0) {
+      steps[saveIdx].status = 'complete';
+      steps[saveIdx].completedAt = Date.now();
+      steps[saveIdx].detail = `Digest saved (${(generationTime / 1000).toFixed(1)}s total)`;
+    }
+    emitProgress('complete', 'Digest generation complete!', graphStats);
+
     return {
       ...historyEntry!,
       content: digestOutput,
@@ -400,6 +513,13 @@ export async function generateDigest(
 
   } catch (error) {
     console.error('Digest generation failed:', error);
+    const errorStep = steps.find(s => s.status === 'running');
+    if (errorStep) {
+      errorStep.status = 'error';
+      errorStep.error = (error as Error).message;
+    }
+    emitProgress('error', `Generation failed: ${(error as Error).message}`);
+
     if (historyEntry) {
       await updateDigestHistoryStatus(historyEntry.id, {
         status: 'failed',
