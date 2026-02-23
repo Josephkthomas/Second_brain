@@ -208,7 +208,7 @@ async function fetchViaApify(
 ): Promise<{ success: boolean; transcript: string | null; language: string | null; is_auto_generated: boolean; error?: string }> {
   const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
   const runResponse = await fetch(
-    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=55`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apifyApiKey}` },
@@ -257,8 +257,9 @@ async function extractTranscript(
 
   // Tier 1: youtube-caption-extractor
   try {
-    console.log(`[Transcript] Tier 1: caption-extractor for ${videoId}`);
-    const result = await withTimeout(tier1CaptionExtractor(videoId), 15000, 'Tier 1 timed out');
+    console.log(`[Transcript] Tier 1: caption-extractor for ${videoId} (+${Date.now() - overallStart}ms)`);
+    // Short timeout — YouTube blocks cloud/datacenter IPs, so this usually fails on Vercel
+    const result = await withTimeout(tier1CaptionExtractor(videoId), 5000, 'Tier 1 timed out');
     if (result && result.length > 50) {
       console.log(`[Transcript] Tier 1 SUCCESS: ${result.length} chars`);
       return { success: true, transcript: result, language: 'en', method: 'caption_extractor', is_auto_generated: true, duration_ms: Date.now() - overallStart };
@@ -272,8 +273,9 @@ async function extractTranscript(
 
   // Tier 2: Innertube API
   try {
-    console.log(`[Transcript] Tier 2: Innertube for ${videoId}`);
-    const result = await withTimeout(fetchViaInnertube(videoId), 15000, 'Tier 2 timed out');
+    console.log(`[Transcript] Tier 2: Innertube for ${videoId} (+${Date.now() - overallStart}ms)`);
+    // Short timeout — YouTube blocks cloud/datacenter IPs, so this usually fails on Vercel
+    const result = await withTimeout(fetchViaInnertube(videoId), 5000, 'Tier 2 timed out');
     if (result && result.length > 50) {
       console.log(`[Transcript] Tier 2 SUCCESS: ${result.length} chars`);
       return { success: true, transcript: result, language: 'en', method: 'innertube', is_auto_generated: true, duration_ms: Date.now() - overallStart };
@@ -288,8 +290,8 @@ async function extractTranscript(
   // Tier 3: Apify
   if (apifyApiKey) {
     try {
-      console.log(`[Transcript] Tier 3: Apify for ${videoId}`);
-      const result = await withTimeout(fetchViaApify(videoUrl, apifyApiKey), 120000, 'Tier 3 timed out');
+      console.log(`[Transcript] Tier 3: Apify for ${videoId} (+${Date.now() - overallStart}ms)`);
+      const result = await withTimeout(fetchViaApify(videoUrl, apifyApiKey), 60000, 'Tier 3 timed out');
       if (result.success && result.transcript && result.transcript.length > 50) {
         console.log(`[Transcript] Tier 3 SUCCESS: ${result.transcript.length} chars`);
         return { success: true, transcript: result.transcript, language: result.language || 'en', method: 'apify', is_auto_generated: result.is_auto_generated, duration_ms: Date.now() - overallStart };
