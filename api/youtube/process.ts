@@ -6,10 +6,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI, Type } from '@google/genai';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const APIFY_API_KEY = process.env.APIFY_API_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const APIFY_API_KEY = process.env.APIFY_API_KEY || '';
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -64,10 +64,17 @@ async function generateChunkEmbedding(text: string): Promise<number[]> {
   }
 }
 
-// Max items to process per batch (Vercel has 10-60s timeout on free tier)
-const MAX_ITEMS_PER_BATCH = 2;
-// Max items to process when user clicks "Process Now" (process_all mode)
-const MAX_ITEMS_PROCESS_ALL = 20;
+// Vercel serverless function config — extend timeout to 300s (Pro) or 60s (Hobby)
+export const config = { maxDuration: 300 };
+
+// Max items to process per batch — keep LOW to avoid Vercel timeout
+// Each video takes 30-120s (transcript + Gemini + embeddings + cross-ref)
+const MAX_ITEMS_PER_BATCH = 1;
+// User-triggered: process 1 item per request, UI loops for remaining
+const MAX_ITEMS_PROCESS_ALL = 1;
+
+// Items stuck in processing states for longer than this are reset to failed
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 // Verify cron authorization
 function verifyCronAuth(req: VercelRequest): boolean {
@@ -462,6 +469,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id}, process_all: ${process_all})...`);
+
+    // ── Stuck item recovery ──────────────────────────────
+    // Reset items stuck in fetching_transcript or extracting for > 10 minutes
+    const stuckCutoff = new Date(Date.now() - STUCK_THRESHOLD_MS).toISOString();
+    {
+      let stuckUpdate = supabase
+        .from('youtube_ingestion_queue')
+        .update({
+          status: 'failed',
+          error_message: 'Processing timed out (stuck for >10 minutes). Click retry to try again.',
+          processing_step: null,
+          completed_at: new Date().toISOString(),
+        })
+        .in('status', ['fetching_transcript', 'extracting'])
+        .lt('started_at', stuckCutoff);
+
+      if (!isCron && user?.id) {
+        stuckUpdate = stuckUpdate.eq('user_id', user.id);
+      }
+
+      const { error: stuckError } = await stuckUpdate;
+      if (stuckError) {
+        console.warn('[Process] Failed to reset stuck items:', stuckError.message);
+      } else {
+        console.log('[Process] Checked for stuck items (>10min in processing state)');
+      }
+    }
 
     // Build query for pending items with channel AND playlist info
     let query = supabase

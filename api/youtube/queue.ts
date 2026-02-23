@@ -7,8 +7,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -191,8 +191,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'Item id is required' });
       }
 
-      if (!action || !['retry', 'skip'].includes(action)) {
-        return res.status(400).json({ error: 'Action must be "retry" or "skip"' });
+      if (!action || !['retry', 'skip', 'reset'].includes(action)) {
+        return res.status(400).json({ error: 'Action must be "retry", "skip", or "reset"' });
       }
 
       // Verify the item belongs to this user
@@ -247,6 +247,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .update({
             status: 'skipped',
             completed_at: new Date().toISOString(),
+          })
+          .eq('id', id)
+          .eq('user_id', user.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        return res.status(200).json({ item: data });
+      }
+
+      if (action === 'reset') {
+        // Reset stuck items (fetching_transcript or extracting) back to pending
+        if (!['fetching_transcript', 'extracting', 'failed'].includes(existingItem.status)) {
+          return res.status(400).json({ error: 'Can only reset stuck or failed items' });
+        }
+
+        const { data, error } = await supabase
+          .from('youtube_ingestion_queue')
+          .update({
+            status: 'pending',
+            error_message: null,
+            processing_step: null,
+            started_at: null,
+            completed_at: null,
+            retry_count: existingItem.status === 'failed' ? existingItem.retry_count + 1 : 0,
           })
           .eq('id', id)
           .eq('user_id', user.id)
