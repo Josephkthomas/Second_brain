@@ -4,7 +4,7 @@ import {
   Sparkles, Clock, BarChart3, ArrowRight, ChevronDown, ChevronUp,
   Mail, Zap, Eye, FileText, Send, Loader2, CheckCircle2, XCircle,
   TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
-  Compass,
+  Compass, Share2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
@@ -44,8 +44,11 @@ type DeliveryState = { status: 'idle' } | { status: 'delivering' } | { status: '
 export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
   const output = entry.content as DigestOutput;
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
-  const [showDeliverMenu, setShowDeliverMenu] = useState(false);
+  const [showShareMenu, setShowShareMenu] = useState(false);
   const [deliveryStatus, setDeliveryStatus] = useState<Record<string, DeliveryState>>({});
+  // Ad-hoc email state
+  const [customEmail, setCustomEmail] = useState('');
+  const [sendToStatus, setSendToStatus] = useState<Record<string, DeliveryState>>({});
   const { session } = useAuth();
 
   if (!output || !output.executive_summary) {
@@ -73,15 +76,50 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
   const errorSections = output.sections?.filter(s => s.content.startsWith('Error')) || [];
 
   const activeChannels = channels?.filter(ch => ch.is_active) || [];
+  const userEmail = session?.user?.email;
 
+  // ─── Ad-hoc email send ─────────────────────────────────────
+  const handleSendToEmail = async (email: string) => {
+    if (!session?.access_token || !email) return;
+    const key = email.toLowerCase();
+    setSendToStatus(prev => ({ ...prev, [key]: { status: 'delivering' } }));
+    try {
+      const response = await fetch('/api/digest/deliver', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ history_id: entry.id, email }),
+      });
+      const data = await response.json();
+      if (data.success && data.results?.email === 'delivered') {
+        setSendToStatus(prev => ({ ...prev, [key]: { status: 'delivered' } }));
+        setTimeout(() => {
+          setSendToStatus(prev => {
+            const next = { ...prev };
+            if (next[key]?.status === 'delivered') delete next[key];
+            return next;
+          });
+        }, 4000);
+      } else {
+        const errMsg = data.results?.email || data.error || 'Send failed';
+        setSendToStatus(prev => ({ ...prev, [key]: { status: 'error', message: errMsg } }));
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Network error';
+      console.error('Send to email error:', errMsg);
+      setSendToStatus(prev => ({ ...prev, [key]: { status: 'error', message: errMsg } }));
+    }
+  };
+
+  // ─── Channel-based delivery ────────────────────────────────
   const handleDeliver = async (channelTypes?: string[]) => {
     if (!session?.access_token) return;
-
     const targetsToDeliver = channelTypes || activeChannels.map(ch => ch.channel_type);
     for (const ct of targetsToDeliver) {
       setDeliveryStatus(prev => ({ ...prev, [ct]: { status: 'delivering' } }));
     }
-
     let hasSuccess = false;
     try {
       const response = await fetch('/api/digest/deliver', {
@@ -90,12 +128,8 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({
-          history_id: entry.id,
-          channels: channelTypes,
-        }),
+        body: JSON.stringify({ history_id: entry.id, channels: channelTypes }),
       });
-
       const data = await response.json();
       if (data.success && data.results) {
         for (const [ct, result] of Object.entries(data.results)) {
@@ -122,8 +156,6 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
         setDeliveryStatus(prev => ({ ...prev, [ct]: { status: 'error', message: errMsg } }));
       }
     }
-
-    // Auto-clear only successful deliveries after 3s; errors persist until next attempt
     if (hasSuccess) {
       setTimeout(() => {
         setDeliveryStatus(prev => {
@@ -135,6 +167,27 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
         });
       }, 3000);
     }
+  };
+
+  const handleCustomEmailSend = () => {
+    const trimmed = customEmail.trim();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return;
+    handleSendToEmail(trimmed);
+    setCustomEmail('');
+  };
+
+  // Helper to render send-to status inline
+  const renderSendStatus = (key: string) => {
+    const state = sendToStatus[key.toLowerCase()];
+    if (!state) return null;
+    if (state.status === 'delivering') return <Loader2 size={12} className="text-cyan-400 animate-spin shrink-0" />;
+    if (state.status === 'delivered') return <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />;
+    if (state.status === 'error') return (
+      <span className="text-[10px] text-red-400 truncate max-w-[140px]" title={state.message}>
+        {state.message?.replace('failed: ', '').slice(0, 30) || 'Failed'}
+      </span>
+    );
+    return null;
   };
 
   return (
@@ -149,60 +202,120 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
           <p className="text-[11px] text-slate-600">{date}</p>
         </div>
 
-        {/* Deliver Button */}
-        {activeChannels.length > 0 && (
-          <div className="relative">
-            <button
-              onClick={() => setShowDeliverMenu(!showDeliverMenu)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20 transition-colors"
-            >
-              <Send size={12} />
-              Deliver
-              <ChevronDown size={12} />
-            </button>
-            {showDeliverMenu && (
-              <div className="absolute right-0 top-full mt-1 w-56 bg-slate-900 border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
-                <button
-                  onClick={() => { handleDeliver(); setShowDeliverMenu(false); }}
-                  className="w-full px-3 py-2.5 text-left text-xs font-medium text-white hover:bg-white/5 transition-colors border-b border-white/5"
-                >
-                  Deliver to all channels
-                </button>
-                {activeChannels.map(ch => {
-                  const Icon = CHANNEL_ICONS[ch.channel_type] || Send;
-                  const color = CHANNEL_COLORS[ch.channel_type] || 'text-slate-400';
-                  const state = deliveryStatus[ch.channel_type];
-                  const st = state?.status;
-                  return (
-                    <button
-                      key={ch.id}
-                      onClick={() => { handleDeliver([ch.channel_type]); setShowDeliverMenu(false); }}
-                      disabled={st === 'delivering'}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors"
-                    >
-                      {st === 'delivering' ? (
-                        <Loader2 size={12} className="text-cyan-400 animate-spin" />
-                      ) : st === 'delivered' ? (
-                        <CheckCircle2 size={12} className="text-emerald-400" />
-                      ) : st === 'error' ? (
-                        <XCircle size={12} className="text-red-400" />
-                      ) : (
-                        <Icon size={12} className={color} />
-                      )}
-                      <span className="text-slate-300 capitalize">{ch.channel_type}</span>
-                      {st === 'delivered' && <span className="ml-auto text-[10px] text-emerald-400">Sent</span>}
-                      {st === 'error' && (
-                        <span className="ml-auto text-[10px] text-red-400 truncate max-w-[120px]" title={state.status === 'error' ? state.message : ''}>
-                          {state.status === 'error' && state.message ? state.message.slice(0, 30) : 'Failed'}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+        {/* Share / Deliver Button — always visible */}
+        <div className="relative">
+          <button
+            onClick={() => setShowShareMenu(!showShareMenu)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20 transition-colors"
+          >
+            <Share2 size={12} />
+            Share
+            <ChevronDown size={12} />
+          </button>
+          {showShareMenu && (
+            <div className="absolute right-0 top-full mt-1 w-72 bg-slate-900 border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
+              {/* ─── Quick Send Section ─── */}
+              <div className="px-3 pt-2.5 pb-1">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Send via email</span>
               </div>
-            )}
-          </div>
-        )}
+
+              {/* Send to me */}
+              {userEmail && (
+                <button
+                  onClick={() => handleSendToEmail(userEmail)}
+                  disabled={sendToStatus[userEmail.toLowerCase()]?.status === 'delivering'}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors"
+                >
+                  <Mail size={12} className="text-blue-400 shrink-0" />
+                  <span className="text-slate-300 truncate flex-1">Send to me ({userEmail})</span>
+                  {renderSendStatus(userEmail)}
+                </button>
+              )}
+
+              {/* Custom email input */}
+              <div className="px-3 py-2 flex items-center gap-2">
+                <input
+                  type="email"
+                  value={customEmail}
+                  onChange={e => setCustomEmail(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleCustomEmailSend()}
+                  placeholder="Enter email address..."
+                  className="flex-1 px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-slate-300 placeholder:text-slate-600 focus:border-cyan-500/30 focus:outline-none"
+                />
+                <button
+                  onClick={handleCustomEmailSend}
+                  disabled={!customEmail.trim()}
+                  className="px-2 py-1.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Send
+                </button>
+              </div>
+
+              {/* Show status for last custom send */}
+              {Object.entries(sendToStatus).filter(([k]) => k !== userEmail?.toLowerCase()).map(([email, state]) => (
+                <div key={email} className="px-3 py-1 flex items-center gap-2 text-xs text-slate-500">
+                  <span className="truncate flex-1">{email}</span>
+                  {state.status === 'delivering' && <Loader2 size={10} className="text-cyan-400 animate-spin" />}
+                  {state.status === 'delivered' && <span className="text-emerald-400 text-[10px]">Sent</span>}
+                  {state.status === 'error' && (
+                    <span className="text-red-400 text-[10px] truncate max-w-[120px]" title={state.message}>
+                      {state.message?.replace('failed: ', '').slice(0, 25) || 'Failed'}
+                    </span>
+                  )}
+                </div>
+              ))}
+
+              {/* ─── Configured Channels Section ─── */}
+              {activeChannels.length > 0 && (
+                <>
+                  <div className="border-t border-white/5 mx-3 mt-1" />
+                  <div className="px-3 pt-2.5 pb-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Configured channels</span>
+                  </div>
+                  <button
+                    onClick={() => { handleDeliver(); setShowShareMenu(false); }}
+                    className="w-full px-3 py-2 text-left text-xs font-medium text-white hover:bg-white/5 transition-colors"
+                  >
+                    Deliver to all channels
+                  </button>
+                  {activeChannels.map(ch => {
+                    const Icon = CHANNEL_ICONS[ch.channel_type] || Send;
+                    const color = CHANNEL_COLORS[ch.channel_type] || 'text-slate-400';
+                    const state = deliveryStatus[ch.channel_type];
+                    const st = state?.status;
+                    return (
+                      <button
+                        key={ch.id}
+                        onClick={() => { handleDeliver([ch.channel_type]); setShowShareMenu(false); }}
+                        disabled={st === 'delivering'}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors"
+                      >
+                        {st === 'delivering' ? (
+                          <Loader2 size={12} className="text-cyan-400 animate-spin" />
+                        ) : st === 'delivered' ? (
+                          <CheckCircle2 size={12} className="text-emerald-400" />
+                        ) : st === 'error' ? (
+                          <XCircle size={12} className="text-red-400" />
+                        ) : (
+                          <Icon size={12} className={color} />
+                        )}
+                        <span className="text-slate-300 capitalize flex-1">{ch.channel_type}</span>
+                        {st === 'delivered' && <span className="text-[10px] text-emerald-400">Sent</span>}
+                        {st === 'error' && (
+                          <span className="text-[10px] text-red-400 truncate max-w-[120px]" title={state.status === 'error' ? state.message : ''}>
+                            {state.status === 'error' && state.message ? state.message.replace('failed: ', '').slice(0, 25) : 'Failed'}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+
+              <div className="h-1" />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ─── Metadata Bar (moved to top) ─── */}

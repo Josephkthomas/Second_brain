@@ -1,6 +1,7 @@
 // Vercel API endpoint for digest delivery to channels
 // POST /api/digest/deliver
-// Body: { history_id: string, channels?: string[] }
+// Body: { history_id: string, channels?: string[], email?: string }
+// If `email` is provided, sends directly to that address (ad-hoc / share)
 // Headers: Authorization: Bearer <jwt>
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
@@ -249,7 +250,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
   if (authError || !user) return res.status(401).json({ error: 'Invalid token' });
 
-  const { history_id, channels: channelFilter } = req.body;
+  const { history_id, channels: channelFilter, email: adHocEmail } = req.body;
   if (!history_id) return res.status(400).json({ error: 'history_id required' });
 
   try {
@@ -270,6 +271,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('id', entry.digest_profile_id)
       .single();
 
+    // ─── Ad-hoc email: send to a specific address and return ───
+    if (adHocEmail && typeof adHocEmail === 'string') {
+      const { subject, html } = formatDigestEmail(entry.content, profile?.name || 'Digest');
+      const { success, error } = await sendEmail(adHocEmail, subject, html);
+      return res.status(200).json({
+        success,
+        results: { email: success ? 'delivered' : `failed: ${error}` },
+      });
+    }
+
+    // ─── Channel-based delivery ────────────────────────────────
     // Load channels
     const { data: channels } = await supabase
       .from('digest_channels')
