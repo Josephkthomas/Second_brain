@@ -29,6 +29,10 @@
     {
       "path": "/api/ingest/process",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/digest/cron",
+      "schedule": "0 * * * *"
     }
   ]
 }

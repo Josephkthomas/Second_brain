@@ -26,6 +26,7 @@
 | Chrome extension | Browser Extension | `extension/` directory |
 | UI/styling changes | Styling and Theming | `utils/theme.ts`, Tailwind classes |
 | New lens/filter | Lenses | `constants.ts`, `components/GraphView.tsx` |
+| Orientation/digests | Orientation Engine | `components/OrientationCenter.tsx`, `services/digest.ts`, `services/digestAgents.ts` |
 
 ### After Making Changes
 
@@ -83,6 +84,9 @@
 │   ├── Sidebar.tsx            # [19KB] Data vault, settings, table discovery
 │   ├── SourceLog.tsx          # [16KB] Knowledge source history
 │   ├── AIAnalyst.tsx          # [3KB] AI analysis overlay
+│   ├── OrientationCenter.tsx  # Composable digest configuration + preview
+│   ├── DigestViewer.tsx       # Digest output renderer
+│   ├── DigestTemplateSelector.tsx # Module template picker modal
 │   ├── AuthLayout.tsx         # Auth page wrapper
 │   └── ProtectedRoute.tsx     # Route guard HOC
 │
@@ -92,7 +96,9 @@
 │
 ├── services/                  # Business Logic and API Integration
 │   ├── supabase.ts            # [14KB] All database operations
-│   └── gemini.ts              # [31KB] All AI operations
+│   ├── gemini.ts              # [31KB] All AI operations
+│   ├── digest.ts              # Digest CRUD (profiles, modules, channels, history)
+│   └── digestAgents.ts        # Digest AI orchestration (sub-agents + meta-agent)
 │
 ├── contexts/                  # React Context Providers
 │   └── AuthContext.tsx        # Supabase auth state management
@@ -221,6 +227,60 @@ created_at TIMESTAMPTZ
 user_id UUID
 ```
 
+### digest_profiles
+
+```sql
+id UUID PRIMARY KEY
+user_id UUID                    -- FK to auth.users
+name TEXT NOT NULL              -- e.g., "Morning Brief"
+description TEXT
+frequency TEXT                  -- daily, weekly, monthly
+delivery_time TIME              -- When to deliver (user's timezone)
+timezone TEXT                   -- IANA timezone
+scope JSONB                     -- {"mode":"all_active"} or {"mode":"selected","anchor_ids":[]}
+density TEXT                    -- brief, standard, comprehensive
+is_active BOOLEAN
+last_generated_at TIMESTAMPTZ
+```
+
+### digest_modules
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+user_id UUID
+template_id TEXT                -- References config/digestTemplates.ts
+custom_name TEXT                -- For custom modules
+user_context TEXT               -- Additional user instructions
+tools_enabled JSONB             -- ["graph_query", "web_search"]
+sort_order INTEGER
+is_active BOOLEAN
+```
+
+### digest_channels
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+channel_type TEXT               -- email, telegram, slack
+channel_config JSONB            -- {"address":"user@example.com"}
+density_override TEXT           -- Optional per-channel density
+is_active BOOLEAN
+```
+
+### digest_history
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+user_id UUID
+content JSONB                   -- Full DigestOutput JSON
+module_outputs JSONB            -- Individual module results
+channels_delivered TEXT[]       -- Which channels received it
+status TEXT                     -- generating, completed, failed
+generation_time_ms INTEGER
+```
+
 ---
 
 ## Services Reference
@@ -273,6 +333,35 @@ user_id UUID
 **Utilities:**
 - `extractKeywordsFromQuery(query)` - LOCAL keyword extraction (no API)
 - `backfillEmbeddings(limit, callback)` - Batch generate embeddings
+
+### Digest Service (`services/digest.ts`)
+
+**Profile CRUD:**
+- `fetchDigestProfiles()` - List all user's digest profiles
+- `fetchDigestProfile(id)` - Get profile with modules + channels
+- `createDigestProfile(data)` - Create new profile
+- `updateDigestProfile(id, updates)` - Update profile settings
+- `deleteDigestProfile(id)` - Delete profile (cascades)
+
+**Module CRUD:**
+- `addDigestModule(data)` - Add module to profile
+- `updateDigestModule(id, updates)` - Update module settings
+- `deleteDigestModule(id)` - Remove module
+- `reorderDigestModules(profileId, moduleIds)` - Reorder modules
+
+**Channel CRUD:**
+- `addDigestChannel(data)` - Add delivery channel
+- `updateDigestChannel(id, updates)` - Update channel config
+- `deleteDigestChannel(id)` - Remove channel
+
+**History:**
+- `fetchDigestHistory(profileId?, limit?)` - Get delivery history
+- `saveDigestResult(result)` - Store generated digest
+
+### Digest Agents (`services/digestAgents.ts`)
+
+- `generateDigest(profileId, onProgress?)` - Full digest generation orchestration
+- `getTimeRange(frequency)` - Calculate reporting period
 
 ---
 
@@ -487,6 +576,10 @@ git branch -d feature/name
 | New database query | `services/supabase.ts` |
 | Modify chat | `components/ChatInterface.tsx` |
 | Add new lens | `constants.ts`, `GraphView.tsx` |
+| Add digest template | `config/digestTemplates.ts` |
+| Modify digest UI | `components/OrientationCenter.tsx` |
+| Modify digest generation | `services/digestAgents.ts`, `api/digest/generate.ts` |
+| Add delivery channel | `api/digest/deliver.ts`, `components/OrientationCenter.tsx` |
 
 ---
 
@@ -514,4 +607,4 @@ Update when you:
 
 ---
 
-*Last updated: January 2026*
+*Last updated: February 2026*
