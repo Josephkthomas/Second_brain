@@ -510,7 +510,7 @@ const MainApp: React.FC = () => {
               </button>
            </div>
            <div className="h-full pt-20 pb-6 px-6">
-              <AutomatePanel />
+              <AutomatePanel onGraphUpdate={handleGraphUpdate} />
            </div>
         </div>
       )}

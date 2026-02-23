@@ -113,6 +113,25 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
     }
   }, [session?.access_token]);
 
+  // Lightweight queue-only refresh (used by QueueStatusPanel to avoid cascade)
+  const fetchQueueOnly = useCallback(async () => {
+    if (!session?.access_token) return;
+    try {
+      const res = await fetch('/api/youtube/queue?limit=100', {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setQueueItems(data.items || []);
+      }
+    } catch (err) {
+      console.error('Error refreshing queue:', err);
+    }
+  }, [session?.access_token]);
+
   // Initial fetch
   useEffect(() => {
     fetchData();
@@ -320,7 +339,7 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
         {activeTab === 'queue' && (
           <QueueStatusPanel
             items={queueItems}
-            onRefresh={fetchData}
+            onRefresh={fetchQueueOnly}
             onGraphUpdate={onGraphUpdate}
           />
         )}

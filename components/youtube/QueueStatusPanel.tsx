@@ -1,9 +1,9 @@
 // QueueStatusPanel - Display YouTube video processing queue
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   Clock, CheckCircle, XCircle, Loader2, RotateCcw,
-  Trash2, ExternalLink, AlertCircle, Filter, Play, Youtube, ListVideo
+  Trash2, ExternalLink, AlertCircle, Filter, Play, Youtube, ListVideo, RefreshCw
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -35,30 +35,17 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ processed: number; remaining: number } | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Auto-poll when items are actively processing
   const hasActiveItems = items.some(
     i => i.status === 'fetching_transcript' || i.status === 'extracting'
   );
 
-  useEffect(() => {
-    if (hasActiveItems && !pollingRef.current) {
-      pollingRef.current = setInterval(() => {
-        onRefresh();
-      }, 2500);
-    } else if (!hasActiveItems && pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [hasActiveItems, onRefresh]);
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await onRefresh();
+    setIsRefreshing(false);
+  };
 
   // Filter items
   const filteredItems = items.filter(item => {
@@ -340,6 +327,22 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
           </button>
         )}
       </div>
+
+      {/* Stale data banner — shown when items are processing */}
+      {hasActiveItems && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-cyan-500/5 border border-cyan-500/20 rounded-lg">
+          <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin flex-shrink-0" />
+          <span className="text-xs text-cyan-300">Videos are being processed.</span>
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="ml-auto flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('w-3 h-3', isRefreshing && 'animate-spin')} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      )}
 
       {/* Queue List */}
       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">

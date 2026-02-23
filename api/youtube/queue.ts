@@ -52,27 +52,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // GET - List queue items
     if (req.method === 'GET') {
       const { channel_id, status, limit = '50' } = req.query;
+      const parsedLimit = parseInt(limit as string, 10) || 50;
 
-      let query = supabase
-        .from('youtube_ingestion_queue')
-        .select('*, youtube_channels(channel_name), youtube_playlists(playlist_name)')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(parseInt(limit as string, 10));
+      // Try with full JOINs first, then fall back if relationships don't exist yet
+      const selectVariants = [
+        '*, youtube_channels(channel_name), youtube_playlists(playlist_name)',
+        '*, youtube_channels(channel_name)',
+        '*',
+      ];
 
-      // Filter by channel if provided
-      if (channel_id && typeof channel_id === 'string') {
-        query = query.eq('channel_id', channel_id);
+      let data: any[] | null = null;
+
+      for (const selectStr of selectVariants) {
+        let query = supabase
+          .from('youtube_ingestion_queue')
+          .select(selectStr)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(parsedLimit);
+
+        if (channel_id && typeof channel_id === 'string') {
+          query = query.eq('channel_id', channel_id);
+        }
+        if (status && typeof status === 'string') {
+          query = query.eq('status', status);
+        }
+
+        const result = await query;
+
+        if (!result.error) {
+          data = result.data;
+          break;
+        }
+
+        // Log the JOIN failure and try the next fallback
+        console.warn(`[queue] SELECT with "${selectStr}" failed:`, result.error.message);
       }
-
-      // Filter by status if provided
-      if (status && typeof status === 'string') {
-        query = query.eq('status', status);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
 
       return res.status(200).json({ items: data || [] });
     }
