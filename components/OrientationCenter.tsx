@@ -266,6 +266,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [previewResult, setPreviewResult] = useState<DigestHistoryEntry | null>(null);
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<DigestHistoryEntry | null>(null);
+  const [viewingChannels, setViewingChannels] = useState<DigestChannel[] | null>(null);
 
   // Form state for new/editing profile
   const [formName, setFormName] = useState('');
@@ -581,6 +582,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     setGenerating(true);
     setGenerationProgress(null);
     setPreviewResult(null);
+    setViewingChannels(null);
     setView('generating');
     try {
       const result = await generateDigest(profileId, (progress) => {
@@ -589,6 +591,9 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       if (result) {
         setPreviewResult(result);
         setSelectedHistoryEntry(result);
+        // Load channels for the Deliver button
+        const fullProfile = await fetchDigestProfile(profileId);
+        if (fullProfile?.channels) setViewingChannels(fullProfile.channels);
         // Brief pause so user can see the complete state
         await new Promise(r => setTimeout(r, 800));
         setView('history_detail');
@@ -606,7 +611,11 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
   // View history entry
   const handleViewHistory = async (entry: DigestHistoryEntry) => {
     setSelectedHistoryEntry(entry);
+    setViewingChannels(null);
     setView('history_detail');
+    // Load channels for the Deliver button
+    const fullProfile = await fetchDigestProfile(entry.digest_profile_id);
+    if (fullProfile?.channels) setViewingChannels(fullProfile.channels);
   };
 
   // Channel operations
@@ -1782,7 +1791,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                 </p>
               </div>
             </div>
-            <DigestViewer entry={selectedHistoryEntry} channels={editingProfile?.channels} />
+            <DigestViewer entry={selectedHistoryEntry} channels={viewingChannels || editingProfile?.channels} />
           </div>
         )}
       </div>
