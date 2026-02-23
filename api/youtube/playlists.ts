@@ -7,13 +7,15 @@
 // POST uses a two-phase write to avoid PostgREST pattern validation failures:
 //   Phase 1: INSERT only NOT NULL fields (no UUID[], no nullable *_url columns)
 //   Phase 2: UPDATE to add optional fields (playlist_name, thumbnail_url, linked_anchor_ids, etc.)
+//
+// All helpers are inlined to avoid cross-file import bundling issues on Vercel.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { fetchPlaylistItems } from './_utils/playlist-helpers';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -33,7 +35,7 @@ async function verifyAuth(req: VercelRequest) {
   return { user, error: null };
 }
 
-// ── Helpers ──────────────────────────────────────────
+// ── Helpers (all inlined) ────────────────────────────
 
 function extractPlaylistId(url: string): string | null {
   try {
@@ -41,7 +43,6 @@ function extractPlaylistId(url: string): string | null {
     const listParam = parsed.searchParams.get('list');
     if (listParam) return listParam;
   } catch {
-    // Fallback: regex extraction
     const match = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
     if (match) return match[1];
   }
@@ -55,6 +56,62 @@ function generateSynapseCode(): string {
     code += chars[Math.floor(Math.random() * chars.length)];
   }
   return `SYN-${code}`;
+}
+
+interface PlaylistVideo {
+  videoId: string;
+  title: string;
+  thumbnailUrl: string;
+  publishedAt: string;
+  channelTitle: string;
+}
+
+async function fetchPlaylistItems(
+  playlistId: string,
+  apiKey: string,
+  maxVideos: number = 200
+): Promise<PlaylistVideo[]> {
+  const videos: PlaylistVideo[] = [];
+  let nextPageToken: string | null = null;
+
+  do {
+    const params = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      playlistId,
+      maxResults: '50',
+      key: apiKey,
+    });
+    if (nextPageToken) params.set('pageToken', nextPageToken);
+
+    const response = await fetch(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`);
+    if (!response.ok) break;
+
+    const data = await response.json();
+    for (const item of data.items || []) {
+      const videoId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
+      if (!videoId) continue;
+      const title = item.snippet?.title || '';
+      if (title === 'Deleted video' || title === 'Private video') continue;
+
+      videos.push({
+        videoId,
+        title: title || 'Untitled',
+        thumbnailUrl:
+          item.snippet?.thumbnails?.high?.url ||
+          item.snippet?.thumbnails?.default?.url ||
+          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        publishedAt:
+          item.contentDetails?.videoPublishedAt ||
+          item.snippet?.publishedAt ||
+          new Date().toISOString(),
+        channelTitle: item.snippet?.videoOwnerChannelTitle || '',
+      });
+      if (videos.length >= maxVideos) return videos;
+    }
+    nextPageToken = data.nextPageToken || null;
+  } while (nextPageToken);
+
+  return videos;
 }
 
 async function verifyPlaylist(playlistId: string): Promise<{
@@ -71,7 +128,7 @@ async function verifyPlaylist(playlistId: string): Promise<{
   }
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&id=${playlistId}&key=${apiKey}`;
+    const url = `${YOUTUBE_API_BASE}/playlists?part=snippet,contentDetails&id=${playlistId}&key=${apiKey}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -117,18 +174,16 @@ async function queuePlaylistVideos(
   const videos = await fetchPlaylistItems(playlist.playlist_id, apiKey);
   if (videos.length === 0) return { queued: 0, skipped: 0 };
 
-  // Check which videos are already in the queue for this user
   const { data: existingItems } = await supabase
     .from('youtube_ingestion_queue')
     .select('video_id')
     .eq('user_id', userId);
 
-  const existingVideoIds = new Set(existingItems?.map((item: any) => item.video_id) || []);
+  const existingVideoIds = new Set((existingItems || []).map((item: any) => item.video_id));
   const newVideos = videos.filter(v => !existingVideoIds.has(v.videoId));
 
   if (newVideos.length === 0) return { queued: 0, skipped: videos.length };
 
-  // Build queue items — only include nullable fields when they have real values
   const queueItems = newVideos.map(video => {
     const item: Record<string, any> = {
       user_id: userId,
@@ -148,7 +203,7 @@ async function queuePlaylistVideos(
 
   const { error: queueError } = await supabase
     .from('youtube_ingestion_queue')
-    .insert(queueItems as any);
+    .insert(queueItems);
 
   if (queueError) {
     console.error('[playlists] Queue insert error:', queueError.message);
@@ -169,15 +224,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Auth
-  const { user, error: authError } = await verifyAuth(req);
-  if (!user) {
-    return res.status(401).json({ error: authError });
-  }
-
-  const supabase = getSupabase();
-
   try {
+    // Auth
+    const { user, error: authError } = await verifyAuth(req);
+    if (!user) {
+      return res.status(401).json({ error: authError });
+    }
+
+    const supabase = getSupabase();
+
     // ── GET: List playlists ──────────────────────
     if (req.method === 'GET') {
       const { data, error } = await supabase
@@ -229,8 +284,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const synapseCode = generateSynapseCode();
 
       // Step 5: MINIMAL INSERT — only NOT NULL fields
-      // CRITICAL: Do NOT include thumbnail_url, playlist_name, linked_anchor_ids,
-      // custom_instructions, or any nullable field in this INSERT.
       const { data: inserted, error: insertError } = await supabase
         .from('youtube_playlists')
         .insert({
@@ -253,18 +306,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      // Step 6: UPDATE to add optional fields (bypasses PostgREST pattern validation)
+      // Step 6: UPDATE to add optional fields
       const updates: Record<string, any> = {};
 
-      if (verification.title) {
-        updates.playlist_name = verification.title;
-      }
+      if (verification.title) updates.playlist_name = verification.title;
       if (verification.thumbnailUrl && verification.thumbnailUrl.startsWith('http')) {
         updates.thumbnail_url = verification.thumbnailUrl;
       }
-      if (typeof req.body.auto_process === 'boolean') {
-        updates.auto_process = req.body.auto_process;
-      }
+      if (typeof req.body.auto_process === 'boolean') updates.auto_process = req.body.auto_process;
       if (req.body.extraction_mode && ['comprehensive', 'strategic', 'actionable', 'relational'].includes(req.body.extraction_mode)) {
         updates.extraction_mode = req.body.extraction_mode;
       }
@@ -277,9 +326,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (Array.isArray(req.body.linked_anchor_ids) && req.body.linked_anchor_ids.length > 0) {
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         const validIds = req.body.linked_anchor_ids.filter((id: string) => uuidRegex.test(id));
-        if (validIds.length > 0) {
-          updates.linked_anchor_ids = validIds;
-        }
+        if (validIds.length > 0) updates.linked_anchor_ids = validIds;
       }
       if (typeof verification.itemCount === 'number' && verification.itemCount > 0) {
         updates.known_video_count = verification.itemCount;
@@ -296,7 +343,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // Step 7: Fetch the final row with all updates applied
+      // Step 7: Fetch the final row
       const { data: finalPlaylist } = await supabase
         .from('youtube_playlists')
         .select('*')
@@ -315,10 +362,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ── PATCH: Update playlist settings ──────────
     if (req.method === 'PATCH') {
-      const { id, ...updates } = req.body;
-      if (!id) {
-        return res.status(400).json({ error: 'Playlist id is required' });
-      }
+      const { id, ...body } = req.body;
+      if (!id) return res.status(400).json({ error: 'Playlist id is required' });
 
       const allowed = [
         'is_active', 'auto_process', 'extraction_mode', 'anchor_emphasis',
@@ -326,9 +371,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ];
       const safeUpdates: Record<string, any> = {};
       for (const key of allowed) {
-        if (updates[key] !== undefined) {
-          safeUpdates[key] = updates[key];
-        }
+        if (body[key] !== undefined) safeUpdates[key] = body[key];
       }
       safeUpdates.updated_at = new Date().toISOString();
 
@@ -347,9 +390,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── DELETE: Disconnect playlist ──────────────
     if (req.method === 'DELETE') {
       const { id } = req.body;
-      if (!id) {
-        return res.status(400).json({ error: 'Playlist id is required' });
-      }
+      if (!id) return res.status(400).json({ error: 'Playlist id is required' });
 
       const { error } = await supabase
         .from('youtube_playlists')
@@ -364,12 +405,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
 
   } catch (error: any) {
-    console.error('[playlists] API error:', JSON.stringify(error, null, 2));
-    const message = error?.message || 'Internal server error';
-    const details = error?.details || error?.hint || '';
+    console.error('[playlists] Unhandled error:', error?.message || error, error?.stack);
     return res.status(500).json({
-      error: details ? `${message} — ${details}` : message,
-      code: error?.code,
+      error: error?.message || 'Internal server error',
+      stack: process.env.NODE_ENV !== 'production' ? error?.stack : undefined,
     });
   }
 }
