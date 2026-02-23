@@ -83,7 +83,7 @@ export async function fetchPlaylistItems(
  * Get YouTube API key — checks global env first, then user's personal key.
  */
 export async function getUserYouTubeApiKey(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   userId: string
 ): Promise<string | null> {
   if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY;
@@ -94,7 +94,7 @@ export async function getUserYouTubeApiKey(
       .select('youtube_api_key')
       .eq('user_id', userId)
       .single();
-    return data?.youtube_api_key || null;
+    return (data as any)?.youtube_api_key || null;
   } catch {
     return null;
   }

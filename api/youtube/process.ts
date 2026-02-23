@@ -804,13 +804,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // Update source stats (channel or playlist)
         if (item.playlist_source_id) {
-          await supabase.rpc('increment_playlist_ingested', { playlist_id: item.playlist_source_id }).catch(() => {
+          try {
+            await supabase.rpc('increment_playlist_ingested', { playlist_id: item.playlist_source_id });
+          } catch {
             // Fallback: manual update if RPC not available
-            supabase
+            await supabase
               .from('youtube_playlists')
-              .update({ total_videos_ingested: (playlistSettings as any)?.total_videos_ingested + 1 || 1 })
+              .update({ total_videos_ingested: ((playlistSettings as any)?.total_videos_ingested || 0) + 1 })
               .eq('id', item.playlist_source_id);
-          });
+          }
         } else if (item.channel_id) {
           await supabase
             .from('youtube_channels')
