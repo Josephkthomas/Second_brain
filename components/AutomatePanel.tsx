@@ -1,19 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Workflow, Mic, Terminal, Copy, Check, Youtube, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
+import { Workflow, Mic, Terminal, Copy, Check, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
+import clsx from 'clsx';
 import { INTEGRATIONS } from '../config/integrations';
 import { fetchUserIntegrations } from '../services/integrations';
 import type { UserIntegration } from '../types/integrations';
 import IntegrationTile from './integrations/IntegrationTile';
 import SetupModal from './integrations/SetupModal';
-import YouTubeManager from './youtube/YouTubeManager';
+import PlaylistHub from './youtube/PlaylistHub';
 
 const MEETING_SLUGS = ['circleback', 'fireflies', 'tldv', 'meetgeek'];
 
+type AutomateTab = 'meetings' | 'youtube' | 'api';
+
 interface AutomatePanelProps {
   onGraphUpdate?: () => void;
+  onNavigateToQueue?: () => void;
 }
 
-export const AutomatePanel: React.FC<AutomatePanelProps> = ({ onGraphUpdate }) => {
+export const AutomatePanel: React.FC<AutomatePanelProps> = ({ onGraphUpdate, onNavigateToQueue }) => {
+  const [activeTab, setActiveTab] = useState<AutomateTab>('youtube');
   const [userIntegrations, setUserIntegrations] = useState<UserIntegration[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,76 +42,86 @@ export const AutomatePanel: React.FC<AutomatePanelProps> = ({ onGraphUpdate }) =
 
   const meetingIntegrations = INTEGRATIONS.filter(i => MEETING_SLUGS.includes(i.slug));
 
+  const tabs: { key: AutomateTab; label: string }[] = [
+    { key: 'meetings', label: 'Meeting Transcripts' },
+    { key: 'youtube', label: 'YouTube' },
+    { key: 'api', label: 'Custom API Integration' },
+  ];
+
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-200 p-8 overflow-y-auto">
-      <div className="max-w-4xl mx-auto w-full space-y-10">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-200 p-8 overflow-hidden">
+      <div className="max-w-4xl mx-auto w-full flex flex-col h-full">
 
         {/* Header */}
-        <div>
+        <div className="mb-6">
           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
             <Workflow className="text-cyan-400" size={22} />
             Automate
           </h1>
           <p className="text-slate-400 text-sm mt-1.5 max-w-lg">
             Connect your tools to automatically pipe content into your knowledge graph.
-            Set it up once — your graph updates itself.
           </p>
         </div>
 
-        {/* Meeting Transcripts Section */}
-        <div>
-          <div className="flex items-center gap-2.5 mb-4">
-            <div className="w-7 h-7 rounded-lg bg-slate-800 border border-white/10 flex items-center justify-center">
-              <Mic size={14} className="text-slate-400" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-white">Meeting Transcripts</h2>
-              <p className="text-xs text-slate-500">Automatically ingest transcripts, notes and action items after every meeting</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {meetingIntegrations.map(integration => (
-              <IntegrationTile
-                key={integration.slug}
-                integration={integration}
-                userIntegration={getUserIntegration(integration.slug)}
-                onClick={() => setSelectedSlug(integration.slug)}
-              />
-            ))}
-          </div>
+        {/* Tab Bar */}
+        <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 w-fit mb-6 flex-shrink-0">
+          {tabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={clsx(
+                'px-4 py-2 rounded-md text-sm font-bold transition-all',
+                activeTab === tab.key
+                  ? 'bg-slate-800 text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-300'
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        {/* YouTube Auto-Ingest Section */}
-        <div>
-          <div className="flex items-center gap-2.5 mb-4">
-            <div className="w-7 h-7 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-center">
-              <Youtube size={14} className="text-red-500" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-white">YouTube Auto-Ingest</h2>
-              <p className="text-xs text-slate-500">Subscribe to channels and playlists to automatically capture knowledge from new videos</p>
-            </div>
-          </div>
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
 
-          <div className="rounded-xl border border-white/10 bg-slate-900/40 overflow-hidden">
-            <YouTubeManager onGraphUpdate={onGraphUpdate} />
-          </div>
-        </div>
+          {/* Meeting Transcripts */}
+          {activeTab === 'meetings' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2.5 mb-4">
+                <div className="w-7 h-7 rounded-lg bg-slate-800 border border-white/10 flex items-center justify-center">
+                  <Mic size={14} className="text-slate-400" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-white">Meeting Transcripts</h2>
+                  <p className="text-xs text-slate-500">Automatically ingest transcripts, notes and action items after every meeting</p>
+                </div>
+              </div>
 
-        {/* Custom / API Section */}
-        <div>
-          <div className="flex items-center gap-2.5 mb-4">
-            <div className="w-7 h-7 rounded-lg bg-slate-800 border border-white/10 flex items-center justify-center">
-              <Terminal size={14} className="text-emerald-400" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {meetingIntegrations.map(integration => (
+                  <IntegrationTile
+                    key={integration.slug}
+                    integration={integration}
+                    userIntegration={getUserIntegration(integration.slug)}
+                    onClick={() => setSelectedSlug(integration.slug)}
+                  />
+                ))}
+              </div>
             </div>
-            <div>
-              <h2 className="text-sm font-semibold text-white">Custom / API</h2>
-              <p className="text-xs text-slate-500">Send data directly via HTTP for custom integrations</p>
-            </div>
-          </div>
+          )}
 
-          <RawApiCard />
+          {/* YouTube (Playlist-first) */}
+          {activeTab === 'youtube' && (
+            <PlaylistHub
+              onGraphUpdate={onGraphUpdate}
+              onNavigateToQueue={onNavigateToQueue}
+            />
+          )}
+
+          {/* Custom API Integration */}
+          {activeTab === 'api' && (
+            <RawApiCard />
+          )}
         </div>
       </div>
 

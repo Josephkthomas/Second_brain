@@ -199,23 +199,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Generate Synapse code
       const synapseCode = generatePlaylistCode();
 
-      // Insert playlist
-      const insertPayload = {
+      // Insert playlist — only include nullable fields when they have values
+      // (PostgREST may infer URL-format validation for *_url columns with null values)
+      const insertPayload: Record<string, any> = {
         user_id: user.id,
         playlist_id: playlistId,
         playlist_url: playlist_url.trim(),
-        playlist_name: verification.title,
         synapse_code: synapseCode,
-        thumbnail_url: verification.thumbnailUrl,
         auto_process: Boolean(auto_process),
         extraction_mode: String(extraction_mode || 'comprehensive'),
         anchor_emphasis: String(anchor_emphasis || 'standard'),
         linked_anchor_ids: validAnchorIds,
-        custom_instructions: custom_instructions || null,
         known_video_count: Number(verification.itemCount) || 0,
         connection_status: 'verified',
         is_active: true,
       };
+      if (verification.title) insertPayload.playlist_name = verification.title;
+      if (verification.thumbnailUrl) insertPayload.thumbnail_url = verification.thumbnailUrl;
+      if (custom_instructions) insertPayload.custom_instructions = custom_instructions;
 
       const { data, error } = await supabase
         .from('youtube_playlists')

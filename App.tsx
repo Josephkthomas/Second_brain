@@ -20,9 +20,10 @@ import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
 import { AutomatePanel } from './components/AutomatePanel';
 import { HistoryPanel } from './components/HistoryPanel';
+import QueueHub from './components/QueueHub';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow, ListTodo
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -47,6 +48,7 @@ const MainApp: React.FC = () => {
   const [showAnchorManager, setShowAnchorManager] = useState(false);
   const [showExtractionSettings, setShowExtractionSettings] = useState(false);
   const [showAutomatePanel, setShowAutomatePanel] = useState(false);
+  const [showQueuePanel, setShowQueuePanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
@@ -381,6 +383,20 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Automate</span>
               </button>
 
+              <button
+                onClick={() => setShowQueuePanel(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                  showQueuePanel
+                    ? "bg-amber-500/20 text-amber-400 border-amber-500/50"
+                    : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                )}
+                title="Processing Queue"
+              >
+                <ListTodo size={16} />
+                <span className="hidden sm:inline">Queue</span>
+              </button>
+
             </div>
 
             {/* User & Sign Out */}
@@ -510,7 +526,30 @@ const MainApp: React.FC = () => {
               </button>
            </div>
            <div className="h-full pt-20 pb-6 px-6">
-              <AutomatePanel onGraphUpdate={handleGraphUpdate} />
+              <AutomatePanel
+                onGraphUpdate={handleGraphUpdate}
+                onNavigateToQueue={() => {
+                  setShowAutomatePanel(false);
+                  setShowQueuePanel(true);
+                }}
+              />
+           </div>
+        </div>
+      )}
+
+      {/* 4d. MODAL LAYER (Queue Panel) */}
+      {showQueuePanel && (
+        <div className="absolute inset-0 z-50 bg-cyber-black/95 backdrop-blur-xl animate-in slide-in-from-bottom-10">
+           <div className="absolute top-6 right-6 z-50">
+              <button
+                onClick={() => setShowQueuePanel(false)}
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={24} />
+              </button>
+           </div>
+           <div className="h-full pt-20 pb-6 px-6">
+              <QueueHub onGraphUpdate={handleGraphUpdate} />
            </div>
         </div>
       )}
