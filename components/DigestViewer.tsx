@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
   Sparkles, Clock, BarChart3, ArrowRight, ChevronDown, ChevronUp,
-  Mail, Zap, Eye, FileText,
+  Mail, Zap, Eye, FileText, Send, Loader2, CheckCircle2, XCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
-import type { DigestOutput, DigestHistoryEntry } from '../types/digest';
+import { useAuth } from '../contexts/AuthContext';
+import type { DigestOutput, DigestHistoryEntry, DigestChannel } from '../types/digest';
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap, Sparkles,
@@ -17,13 +18,31 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
 };
 
+const CHANNEL_ICONS: Record<string, React.ComponentType<any>> = {
+  email: Mail,
+  telegram: Send,
+  slack: Send,
+};
+
+const CHANNEL_COLORS: Record<string, string> = {
+  email: 'text-blue-400',
+  telegram: 'text-blue-400',
+  slack: 'text-purple-400',
+};
+
 interface Props {
   entry: DigestHistoryEntry;
+  channels?: DigestChannel[];
 }
 
-export const DigestViewer: React.FC<Props> = ({ entry }) => {
+type DeliveryStatus = 'idle' | 'delivering' | 'delivered' | 'error';
+
+export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
   const output = entry.content as DigestOutput;
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
+  const [showDeliverMenu, setShowDeliverMenu] = useState(false);
+  const [deliveryStatus, setDeliveryStatus] = useState<Record<string, DeliveryStatus>>({});
+  const { session } = useAuth();
 
   if (!output || !output.executive_summary) {
     return (
@@ -49,15 +68,134 @@ export const DigestViewer: React.FC<Props> = ({ entry }) => {
   const successfulSections = output.sections?.filter(s => !s.content.startsWith('Error')) || [];
   const errorSections = output.sections?.filter(s => s.content.startsWith('Error')) || [];
 
+  const activeChannels = channels?.filter(ch => ch.is_active) || [];
+
+  const handleDeliver = async (channelTypes?: string[]) => {
+    if (!session?.access_token) return;
+
+    const targetsToDeliver = channelTypes || activeChannels.map(ch => ch.channel_type);
+    for (const ct of targetsToDeliver) {
+      setDeliveryStatus(prev => ({ ...prev, [ct]: 'delivering' }));
+    }
+
+    try {
+      const response = await fetch('/api/digest/deliver', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          history_id: entry.id,
+          channels: channelTypes,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success && data.results) {
+        for (const [ct, result] of Object.entries(data.results)) {
+          setDeliveryStatus(prev => ({
+            ...prev,
+            [ct]: (result as string) === 'delivered' ? 'delivered' : 'error',
+          }));
+        }
+      } else {
+        for (const ct of targetsToDeliver) {
+          setDeliveryStatus(prev => ({ ...prev, [ct]: 'error' }));
+        }
+      }
+    } catch {
+      for (const ct of targetsToDeliver) {
+        setDeliveryStatus(prev => ({ ...prev, [ct]: 'error' }));
+      }
+    }
+
+    // Auto-reset after 3s
+    setTimeout(() => setDeliveryStatus({}), 3000);
+  };
+
   return (
     <div className="space-y-6">
       {/* ─── Email-Style Briefing Header ─── */}
-      <div className="text-center pb-4 border-b border-white/5">
-        <div className="flex items-center justify-center gap-2 mb-1">
-          <Zap size={14} className="text-cyan-400" />
-          <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-[2px]">Synapse Intelligence Briefing</span>
+      <div className="flex items-center justify-between pb-4 border-b border-white/5">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Zap size={14} className="text-cyan-400" />
+            <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-[2px]">Synapse Intelligence Briefing</span>
+          </div>
+          <p className="text-[11px] text-slate-600">{date}</p>
         </div>
-        <p className="text-[11px] text-slate-600">{date}</p>
+
+        {/* Deliver Button */}
+        {activeChannels.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setShowDeliverMenu(!showDeliverMenu)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20 transition-colors"
+            >
+              <Send size={12} />
+              Deliver
+              <ChevronDown size={12} />
+            </button>
+            {showDeliverMenu && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-slate-900 border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
+                <button
+                  onClick={() => { handleDeliver(); setShowDeliverMenu(false); }}
+                  className="w-full px-3 py-2.5 text-left text-xs font-medium text-white hover:bg-white/5 transition-colors border-b border-white/5"
+                >
+                  Deliver to all channels
+                </button>
+                {activeChannels.map(ch => {
+                  const Icon = CHANNEL_ICONS[ch.channel_type] || Send;
+                  const color = CHANNEL_COLORS[ch.channel_type] || 'text-slate-400';
+                  const status = deliveryStatus[ch.channel_type];
+                  return (
+                    <button
+                      key={ch.id}
+                      onClick={() => { handleDeliver([ch.channel_type]); setShowDeliverMenu(false); }}
+                      disabled={status === 'delivering'}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors"
+                    >
+                      {status === 'delivering' ? (
+                        <Loader2 size={12} className="text-cyan-400 animate-spin" />
+                      ) : status === 'delivered' ? (
+                        <CheckCircle2 size={12} className="text-emerald-400" />
+                      ) : status === 'error' ? (
+                        <XCircle size={12} className="text-red-400" />
+                      ) : (
+                        <Icon size={12} className={color} />
+                      )}
+                      <span className="text-slate-300 capitalize">{ch.channel_type}</span>
+                      {status === 'delivered' && <span className="ml-auto text-[10px] text-emerald-400">Sent</span>}
+                      {status === 'error' && <span className="ml-auto text-[10px] text-red-400">Failed</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ─── Metadata Bar (moved to top) ─── */}
+      <div className="flex items-center gap-4 text-[10px] text-slate-500 py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
+        <div className="flex items-center gap-1">
+          <Clock size={10} />
+          <span>{new Date(output.generated_at).toLocaleString()}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <BarChart3 size={10} />
+          <span>{output.metadata?.nodes_scanned || 0} nodes, {output.metadata?.edges_scanned || 0} edges scanned</span>
+        </div>
+        {entry.generation_time_ms && (
+          <span>Generated in {(entry.generation_time_ms / 1000).toFixed(1)}s</span>
+        )}
+        {entry.channels_delivered?.length > 0 && (
+          <div className="ml-auto flex items-center gap-1">
+            <CheckCircle2 size={10} className="text-emerald-500" />
+            <span className="text-emerald-500">Delivered: {entry.channels_delivered.join(', ')}</span>
+          </div>
+        )}
       </div>
 
       {/* ─── Executive Summary (Email View) ─── */}
@@ -192,21 +330,6 @@ export const DigestViewer: React.FC<Props> = ({ entry }) => {
           </div>
         </div>
       )}
-
-      {/* ─── Metadata Footer ─── */}
-      <div className="flex items-center gap-4 text-[10px] text-slate-600 pt-2 border-t border-white/5">
-        <div className="flex items-center gap-1">
-          <Clock size={10} />
-          <span>{new Date(output.generated_at).toLocaleString()}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <BarChart3 size={10} />
-          <span>{output.metadata?.nodes_scanned || 0} nodes, {output.metadata?.edges_scanned || 0} edges scanned</span>
-        </div>
-        {entry.generation_time_ms && (
-          <span>Generated in {(entry.generation_time_ms / 1000).toFixed(1)}s</span>
-        )}
-      </div>
     </div>
   );
 };

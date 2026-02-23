@@ -529,3 +529,37 @@ export async function generateDigest(
     return null;
   }
 }
+
+// ─── Custom Module Prompt Generator ──────────────────────────
+
+export async function generateCustomModulePrompt(
+  name: string,
+  lookFor: string,
+  prioritise: string,
+  outputFormat: string,
+): Promise<string> {
+  const ai = initGenAI();
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.0-flash',
+    contents: `You are a meta-prompt engineer. Generate a system prompt for a knowledge graph analysis sub-agent.
+
+The user wants a custom module called "${name}" that:
+- Looks for: ${lookFor}
+- Prioritises: ${prioritise}
+- Output format: ${outputFormat}
+
+Generate a detailed, professional system prompt (200-400 words) that instructs the sub-agent to:
+1. Analyse the user's knowledge graph data
+2. Focus specifically on what the user described
+3. Use the prioritisation criteria they specified
+4. Output in their preferred format
+5. Be concise and factual
+
+Return ONLY the system prompt text, no additional commentary.`,
+    config: {
+      maxOutputTokens: 1000,
+      temperature: 0.7,
+    },
+  });
+  return response.text?.trim() || '';
+}

@@ -116,6 +116,120 @@ async function sendEmail(to: string, subject: string, html: string): Promise<{ s
   }
 }
 
+// ─── Telegram Formatter & Sender ─────────────────────────────
+
+function formatDigestTelegram(content: any, profileName: string): string {
+  const date = new Date(content.generated_at).toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+
+  let text = `*Synapse — ${profileName}*\n_${date}_\n\n`;
+  text += `*Executive Summary*\n${content.executive_summary || 'N/A'}\n\n`;
+
+  for (const section of (content.sections || [])) {
+    if (section.content?.startsWith('Error')) continue;
+    text += `*${section.module_name}*\n`;
+    if (section.highlights?.length > 0) {
+      for (const h of section.highlights) {
+        text += `• ${h}\n`;
+      }
+    }
+    text += '\n';
+  }
+
+  if (content.suggested_next_steps?.length > 0) {
+    text += `*Next Steps*\n`;
+    for (const step of content.suggested_next_steps) {
+      text += `[${step.priority?.toUpperCase()}] ${step.action}\n`;
+    }
+  }
+
+  return text;
+}
+
+async function sendTelegram(botToken: string, chatId: string, text: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      return { success: false, error: `Telegram API error: ${err}` };
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+// ─── Slack Formatter & Sender ────────────────────────────────
+
+function formatDigestSlack(content: any, profileName: string): any {
+  const date = new Date(content.generated_at).toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+
+  const blocks: any[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: `Synapse — ${profileName}` },
+    },
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `_${date}_` }],
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Executive Summary*\n${content.executive_summary || 'N/A'}` },
+    },
+  ];
+
+  for (const section of (content.sections || [])) {
+    if (section.content?.startsWith('Error')) continue;
+    let text = `*${section.module_name}*\n`;
+    if (section.highlights?.length > 0) {
+      text += section.highlights.map((h: string) => `• ${h}`).join('\n');
+    }
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
+  }
+
+  if (content.suggested_next_steps?.length > 0) {
+    blocks.push({ type: 'divider' });
+    let stepsText = '*Next Steps*\n';
+    for (const step of content.suggested_next_steps) {
+      stepsText += `[${step.priority?.toUpperCase()}] ${step.action}\n`;
+    }
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stepsText } });
+  }
+
+  return { blocks };
+}
+
+async function sendSlack(webhookUrl: string, payload: any): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      return { success: false, error: `Slack webhook error: ${err}` };
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+}
+
 // ─── Handler ────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -135,7 +249,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
   if (authError || !user) return res.status(401).json({ error: 'Invalid token' });
 
-  const { history_id } = req.body;
+  const { history_id, channels: channelFilter } = req.body;
   if (!history_id) return res.status(400).json({ error: 'history_id required' });
 
   try {
@@ -166,8 +280,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const results: Record<string, string> = {};
     const deliveredChannels = [...(entry.channels_delivered || [])];
 
-    // Process each channel
-    for (const channel of (channels || [])) {
+    // Process each channel (optionally filtered)
+    const activeChannels = (channels || []).filter((ch: any) =>
+      !channelFilter || channelFilter.includes(ch.channel_type)
+    );
+
+    for (const channel of activeChannels) {
       if (channel.channel_type === 'email') {
         const address = channel.channel_config?.address;
         if (!address) {
@@ -185,7 +303,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           results.email = `failed: ${error}`;
         }
       }
-      // Telegram and Slack will be added in Phase 5
+
+      if (channel.channel_type === 'telegram') {
+        const botToken = channel.channel_config?.bot_token;
+        const chatId = channel.channel_config?.chat_id;
+        if (!botToken || !chatId) {
+          results.telegram = 'Bot token or chat ID not configured';
+          continue;
+        }
+
+        const text = formatDigestTelegram(entry.content, profile?.name || 'Digest');
+        const { success, error } = await sendTelegram(botToken, chatId, text);
+
+        if (success) {
+          results.telegram = 'delivered';
+          if (!deliveredChannels.includes('telegram')) deliveredChannels.push('telegram');
+        } else {
+          results.telegram = `failed: ${error}`;
+        }
+      }
+
+      if (channel.channel_type === 'slack') {
+        const webhookUrl = channel.channel_config?.webhook_url;
+        if (!webhookUrl) {
+          results.slack = 'Webhook URL not configured';
+          continue;
+        }
+
+        const payload = formatDigestSlack(entry.content, profile?.name || 'Digest');
+        const { success, error } = await sendSlack(webhookUrl, payload);
+
+        if (success) {
+          results.slack = 'delivered';
+          if (!deliveredChannels.includes('slack')) deliveredChannels.push('slack');
+        } else {
+          results.slack = `failed: ${error}`;
+        }
+      }
     }
 
     // Update delivery status

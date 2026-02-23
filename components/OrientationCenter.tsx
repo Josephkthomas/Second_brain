@@ -13,10 +13,11 @@ import {
   reorderDigestModules, addDigestChannel, updateDigestChannel, deleteDigestChannel,
   fetchDigestHistory,
 } from '../services/digest';
+import { fetchAnchors } from '../services/supabase';
 import { getDigestTemplate, DIGEST_TEMPLATES } from '../config/digestTemplates';
 import { DigestTemplateSelector } from './DigestTemplateSelector';
 import { DigestViewer } from './DigestViewer';
-import { generateDigest } from '../services/digestAgents';
+import { generateDigest, generateCustomModulePrompt } from '../services/digestAgents';
 import type { GenerationProgress, AgentProgressStep } from '../services/digestAgents';
 import type {
   DigestProfile, DigestModule, DigestChannel, DigestHistoryEntry,
@@ -33,6 +34,110 @@ const FREQUENCY_LABELS: Record<ScheduleFrequency, string> = {
 
 const DENSITY_LABELS: Record<DensityLevel, string> = {
   brief: 'Brief', standard: 'Standard', comprehensive: 'Comprehensive',
+};
+
+// ─── Common Timezones for Dropdown ─────────────────────────
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Toronto',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Amsterdam',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Singapore',
+  'Asia/Kolkata',
+  'Asia/Dubai',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+];
+
+const TIMEZONE_LABELS: Record<string, string> = {
+  'UTC': 'UTC',
+  'America/New_York': 'US Eastern (New York)',
+  'America/Chicago': 'US Central (Chicago)',
+  'America/Denver': 'US Mountain (Denver)',
+  'America/Los_Angeles': 'US Pacific (Los Angeles)',
+  'America/Toronto': 'Canada (Toronto)',
+  'Europe/London': 'UK (London)',
+  'Europe/Paris': 'France (Paris)',
+  'Europe/Berlin': 'Germany (Berlin)',
+  'Europe/Amsterdam': 'Netherlands (Amsterdam)',
+  'Asia/Tokyo': 'Japan (Tokyo)',
+  'Asia/Shanghai': 'China (Shanghai)',
+  'Asia/Singapore': 'Singapore',
+  'Asia/Kolkata': 'India (Kolkata)',
+  'Asia/Dubai': 'UAE (Dubai)',
+  'Australia/Sydney': 'Australia (Sydney)',
+  'Pacific/Auckland': 'New Zealand (Auckland)',
+};
+
+const DENSITY_TOOLTIPS: Record<DensityLevel, string> = {
+  brief: 'Quick headlines and key bullets. 1-2 min read.',
+  standard: 'Balanced analysis with highlights and detail. 3-5 min.',
+  comprehensive: 'Full agent output with deep analysis. 8-12 min.',
+};
+
+type SectionSaveState = 'idle' | 'saving' | 'saved';
+
+// ─── Section Component (defined OUTSIDE to prevent remount) ──
+const Section: React.FC<{
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  expandedSection: string | null;
+  onToggle: (id: string) => void;
+  saveState?: SectionSaveState;
+  onSave?: () => void;
+  children: React.ReactNode;
+}> = ({ id, title, icon, expandedSection, onToggle, saveState, onSave, children }) => {
+  const isExpanded = expandedSection === id;
+  return (
+    <div className="border border-white/10 rounded-lg overflow-hidden">
+      <button
+        onClick={() => onToggle(id)}
+        className="w-full flex items-center justify-between p-4 bg-cyber-slate/30 hover:bg-cyber-slate/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          {icon}
+          <span className="text-sm font-semibold text-white">{title}</span>
+          {saveState === 'saving' && <Loader2 size={12} className="text-cyan-400 animate-spin" />}
+          {saveState === 'saved' && <CheckCircle2 size={12} className="text-emerald-400" />}
+        </div>
+        {isExpanded ? <ChevronUp size={16} className="text-slate-500" /> : <ChevronDown size={16} className="text-slate-500" />}
+      </button>
+      {isExpanded && (
+        <div className="p-4 space-y-4 bg-cyber-slate/10">
+          {children}
+          {onSave && (
+            <div className="pt-2 border-t border-white/5 flex justify-end">
+              <button
+                onClick={onSave}
+                disabled={saveState === 'saving'}
+                className={clsx(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                  saveState === 'saved'
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                    : saveState === 'saving'
+                    ? "bg-white/5 text-slate-500 cursor-not-allowed"
+                    : "bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20"
+                )}
+              >
+                {saveState === 'saving' && <Loader2 size={12} className="animate-spin" />}
+                {saveState === 'saved' && <CheckCircle2 size={12} />}
+                {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save Section'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
 interface Props {
@@ -55,8 +160,20 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
 
   // Editor state
   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
+  const [showCustomModuleWizard, setShowCustomModuleWizard] = useState(false);
+  const [customModuleName, setCustomModuleName] = useState('');
+  const [customModuleLookFor, setCustomModuleLookFor] = useState('');
+  const [customModulePrioritise, setCustomModulePrioritise] = useState('');
+  const [customModuleFormat, setCustomModuleFormat] = useState('');
+  const [customModuleGenerating, setCustomModuleGenerating] = useState(false);
+  const [showTelegramSetup, setShowTelegramSetup] = useState(false);
+  const [showSlackSetup, setShowSlackSetup] = useState(false);
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [expandedSection, setExpandedSection] = useState<string | null>('basics');
+  const [sectionSaveState, setSectionSaveState] = useState<Record<string, SectionSaveState>>({});
 
   // Generation state
   const [generating, setGenerating] = useState(false);
@@ -74,6 +191,8 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
   const [formDayOfMonth, setFormDayOfMonth] = useState<number>(1);
   const [formDensity, setFormDensity] = useState<DensityLevel>('standard');
   const [formScopeMode, setFormScopeMode] = useState<'all_active' | 'selected'>('all_active');
+  const [selectedAnchorIds, setSelectedAnchorIds] = useState<Set<string>>(new Set());
+  const [availableAnchors, setAvailableAnchors] = useState<{ id: string; label: string; entity_type: string }[]>([]);
 
   // Load data
   const loadProfiles = useCallback(async () => {
@@ -97,6 +216,10 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
 
   // Open editor for existing or new profile
   const openEditor = async (profileId?: string) => {
+    // Fetch anchors for scope selection
+    const anchors = await fetchAnchors();
+    setAvailableAnchors(anchors.map(a => ({ id: a.id, label: a.label, entity_type: a.entity_type })));
+
     if (profileId) {
       const profile = await fetchDigestProfile(profileId);
       if (!profile) return;
@@ -109,7 +232,13 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       setFormDayOfWeek(profile.delivery_day_of_week ?? 1);
       setFormDayOfMonth(profile.delivery_day_of_month ?? 1);
       setFormDensity(profile.density);
-      setFormScopeMode(profile.scope?.mode === 'selected' ? 'selected' : 'all_active');
+      const scopeMode = profile.scope?.mode === 'selected' ? 'selected' : 'all_active';
+      setFormScopeMode(scopeMode);
+      if (scopeMode === 'selected' && profile.scope?.mode === 'selected') {
+        setSelectedAnchorIds(new Set((profile.scope as { mode: 'selected'; anchor_ids: string[] }).anchor_ids || []));
+      } else {
+        setSelectedAnchorIds(new Set());
+      }
       setSelectedProfileId(profileId);
     } else {
       setEditingProfile(null);
@@ -122,6 +251,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       setFormDayOfMonth(1);
       setFormDensity('standard');
       setFormScopeMode('all_active');
+      setSelectedAnchorIds(new Set());
       setSelectedProfileId(null);
     }
     setExpandedSection('basics');
@@ -133,7 +263,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     setSaving(true);
     const scope: DigestScope = formScopeMode === 'all_active'
       ? { mode: 'all_active' }
-      : { mode: 'selected', anchor_ids: [] };
+      : { mode: 'selected', anchor_ids: Array.from(selectedAnchorIds) };
 
     if (editingProfile) {
       await updateDigestProfile(editingProfile.id, {
@@ -167,6 +297,70 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     }
     setSaving(false);
     await loadProfiles();
+  };
+
+  // Per-section save with confirmation animation
+  const markSectionSaved = (sectionId: string) => {
+    setSectionSaveState(prev => ({ ...prev, [sectionId]: 'saved' }));
+    setTimeout(() => setSectionSaveState(prev => ({ ...prev, [sectionId]: 'idle' })), 2000);
+  };
+
+  const handleSaveBasics = async () => {
+    setSectionSaveState(prev => ({ ...prev, basics: 'saving' }));
+    const scope: DigestScope = formScopeMode === 'all_active'
+      ? { mode: 'all_active' }
+      : { mode: 'selected', anchor_ids: Array.from(selectedAnchorIds) };
+
+    if (editingProfile) {
+      await updateDigestProfile(editingProfile.id, {
+        name: formName,
+        description: formDescription || null,
+        frequency: formFrequency,
+        delivery_time: formTime,
+        delivery_day_of_week: formFrequency === 'weekly' ? formDayOfWeek : null,
+        delivery_day_of_month: formFrequency === 'monthly' ? formDayOfMonth : null,
+        timezone: formTimezone,
+        density: formDensity,
+        scope,
+      });
+    } else {
+      const { data } = await createDigestProfile({
+        name: formName || 'New Digest',
+        description: formDescription || undefined,
+        frequency: formFrequency,
+        delivery_time: formTime,
+        delivery_day_of_week: formFrequency === 'weekly' ? formDayOfWeek : null,
+        delivery_day_of_month: formFrequency === 'monthly' ? formDayOfMonth : null,
+        timezone: formTimezone,
+        density: formDensity,
+        scope,
+      });
+      if (data) {
+        setSelectedProfileId(data.id);
+        const full = await fetchDigestProfile(data.id);
+        setEditingProfile(full);
+      }
+    }
+    markSectionSaved('basics');
+    await loadProfiles();
+  };
+
+  const handleSaveModules = async () => {
+    setSectionSaveState(prev => ({ ...prev, modules: 'saving' }));
+    if (editingProfile) {
+      const updated = await fetchDigestProfile(editingProfile.id);
+      if (updated) setEditingProfile(updated);
+    }
+    markSectionSaved('modules');
+  };
+
+  const handleSaveChannels = async () => {
+    setSectionSaveState(prev => ({ ...prev, channels: 'saving' }));
+    if (editingProfile) {
+      const updated = await fetchDigestProfile(editingProfile.id);
+      if (updated) setEditingProfile(updated);
+    }
+    markSectionSaved('channels');
   };
 
   // Delete profile
@@ -236,6 +430,38 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     await updateDigestModule(moduleId, { user_context: userContext || null });
   };
 
+  const handleCreateCustomModule = async () => {
+    if (!editingProfile || !customModuleName.trim()) return;
+    setCustomModuleGenerating(true);
+    try {
+      const systemPrompt = await generateCustomModulePrompt(
+        customModuleName,
+        customModuleLookFor,
+        customModulePrioritise,
+        customModuleFormat,
+      );
+      const nextOrder = editingProfile.modules.length;
+      await addDigestModule({
+        digest_profile_id: editingProfile.id,
+        template_id: null,
+        custom_name: customModuleName,
+        custom_system_prompt: systemPrompt,
+        sort_order: nextOrder,
+      });
+      const updated = await fetchDigestProfile(editingProfile.id);
+      if (updated) setEditingProfile(updated);
+      setShowCustomModuleWizard(false);
+      setCustomModuleName('');
+      setCustomModuleLookFor('');
+      setCustomModulePrioritise('');
+      setCustomModuleFormat('');
+    } catch (err) {
+      console.error('Failed to create custom module:', err);
+    } finally {
+      setCustomModuleGenerating(false);
+    }
+  };
+
   // Generate digest
   const handleGenerate = async (profileId: string) => {
     setGenerating(true);
@@ -295,6 +521,41 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleAddTelegramChannel = async () => {
+    if (!editingProfile || !telegramBotToken.trim() || !telegramChatId.trim()) return;
+    await addDigestChannel({
+      digest_profile_id: editingProfile.id,
+      channel_type: 'telegram',
+      channel_config: { bot_token: telegramBotToken, chat_id: telegramChatId },
+    });
+    const updated = await fetchDigestProfile(editingProfile.id);
+    if (updated) setEditingProfile(updated);
+    setShowTelegramSetup(false);
+    setTelegramBotToken('');
+    setTelegramChatId('');
+  };
+
+  const handleAddSlackChannel = async () => {
+    if (!editingProfile || !slackWebhookUrl.trim()) return;
+    await addDigestChannel({
+      digest_profile_id: editingProfile.id,
+      channel_type: 'slack',
+      channel_config: { webhook_url: slackWebhookUrl },
+    });
+    const updated = await fetchDigestProfile(editingProfile.id);
+    if (updated) setEditingProfile(updated);
+    setShowSlackSetup(false);
+    setSlackWebhookUrl('');
+  };
+
+  const handleDeleteChannel = async (channelId: string) => {
+    await deleteDigestChannel(channelId);
+    if (editingProfile) {
+      const updated = await fetchDigestProfile(editingProfile.id);
+      if (updated) setEditingProfile(updated);
+    }
+  };
+
   if (!isOpen) return null;
 
   const getModuleName = (mod: DigestModule) => {
@@ -321,34 +582,9 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     return 'slate';
   };
 
-  // ─── Section Component ────────────────────────────────────
-  const Section: React.FC<{
-    id: string;
-    title: string;
-    icon: React.ReactNode;
-    children: React.ReactNode;
-  }> = ({ id, title, icon, children }) => {
-    const isExpanded = expandedSection === id;
-    return (
-      <div className="border border-white/10 rounded-lg overflow-hidden">
-        <button
-          onClick={() => setExpandedSection(isExpanded ? null : id)}
-          className="w-full flex items-center justify-between p-4 bg-cyber-slate/30 hover:bg-cyber-slate/50 transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            {icon}
-            <span className="text-sm font-semibold text-white">{title}</span>
-          </div>
-          {isExpanded ? <ChevronUp size={16} className="text-slate-500" /> : <ChevronDown size={16} className="text-slate-500" />}
-        </button>
-        {isExpanded && (
-          <div className="p-4 space-y-4 bg-cyber-slate/10">
-            {children}
-          </div>
-        )}
-      </div>
-    );
-  };
+  const toggleSection = useCallback((id: string) => {
+    setExpandedSection(prev => prev === id ? null : id);
+  }, []);
 
   // ─── List View ────────────────────────────────────────────
   const renderListView = () => (
@@ -516,7 +752,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       </div>
 
       {/* Basics Section */}
-      <Section id="basics" title="Basics" icon={<Settings2 size={16} className="text-cyan-400" />}>
+      <Section id="basics" title="Basics" icon={<Settings2 size={16} className="text-cyan-400" />} expandedSection={expandedSection} onToggle={toggleSection} saveState={sectionSaveState.basics} onSave={handleSaveBasics}>
         <div className="space-y-3">
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Name</label>
@@ -596,28 +832,40 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Timezone</label>
-              <input
+              <select
                 value={formTimezone}
                 onChange={e => setFormTimezone(e.target.value)}
                 className="w-full px-3 py-1.5 rounded-md bg-black/30 border border-white/10 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
-              />
+              >
+                {/* If current value isn't in common list, show it first */}
+                {!COMMON_TIMEZONES.includes(formTimezone) && (
+                  <option value={formTimezone}>{formTimezone}</option>
+                )}
+                {COMMON_TIMEZONES.map(tz => (
+                  <option key={tz} value={tz}>{TIMEZONE_LABELS[tz] || tz}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Density</label>
               <div className="flex gap-1.5">
                 {(['brief', 'standard', 'comprehensive'] as DensityLevel[]).map(d => (
-                  <button
-                    key={d}
-                    onClick={() => setFormDensity(d)}
-                    className={clsx(
-                      "flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all border",
-                      formDensity === d
-                        ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/30"
-                        : "bg-transparent text-slate-500 border-transparent hover:bg-white/5 hover:text-slate-300"
-                    )}
-                  >
-                    {DENSITY_LABELS[d]}
-                  </button>
+                  <div key={d} className="flex-1 relative group">
+                    <button
+                      onClick={() => setFormDensity(d)}
+                      className={clsx(
+                        "w-full px-2 py-1.5 rounded-md text-xs font-medium transition-all border",
+                        formDensity === d
+                          ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/30"
+                          : "bg-transparent text-slate-500 border-transparent hover:bg-white/5 hover:text-slate-300"
+                      )}
+                    >
+                      {DENSITY_LABELS[d]}
+                    </button>
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 rounded-md bg-slate-800 border border-white/10 text-[10px] text-slate-300 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-lg">
+                      {DENSITY_TOOLTIPS[d]}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -649,11 +897,54 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               </button>
             </div>
           </div>
+
+          {/* Anchor Checklist (when "Selected Anchors" scope is active) */}
+          {formScopeMode === 'selected' && (
+            <div className="mt-3 p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
+              <label className="text-[10px] text-amber-400 font-medium uppercase tracking-wider mb-2 block">
+                Select Anchors ({selectedAnchorIds.size} selected)
+              </label>
+              {availableAnchors.length === 0 ? (
+                <p className="text-xs text-slate-500 italic">No anchors found. Create anchors in your graph first.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {availableAnchors.map(anchor => {
+                    const isChecked = selectedAnchorIds.has(anchor.id);
+                    return (
+                      <label
+                        key={anchor.id}
+                        className={clsx(
+                          "flex items-center gap-2.5 px-2.5 py-2 rounded-md cursor-pointer transition-colors",
+                          isChecked ? "bg-amber-500/10 border border-amber-500/20" : "hover:bg-white/5 border border-transparent"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            setSelectedAnchorIds(prev => {
+                              const next = new Set(prev);
+                              if (next.has(anchor.id)) next.delete(anchor.id);
+                              else next.add(anchor.id);
+                              return next;
+                            });
+                          }}
+                          className="accent-amber-500 w-3.5 h-3.5"
+                        />
+                        <span className="text-xs text-white font-medium">{anchor.label}</span>
+                        <span className="text-[10px] text-slate-600 ml-auto">{anchor.entity_type}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Section>
 
       {/* Modules Section */}
-      <Section id="modules" title="Modules" icon={<Sparkles size={16} className="text-violet-400" />}>
+      <Section id="modules" title="Modules" icon={<Sparkles size={16} className="text-violet-400" />} expandedSection={expandedSection} onToggle={toggleSection} saveState={sectionSaveState.modules} onSave={editingProfile ? handleSaveModules : undefined}>
         {editingProfile ? (
           <div className="space-y-3">
             {editingProfile.modules.length === 0 ? (
@@ -717,14 +1008,52 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                 );
               })
             )}
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={() => setShowTemplateSelector(true)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition-colors border border-white/10"
-              >
-                <Plus size={14} /> Add Template
-              </button>
+            {/* ── Inline Template Library ── */}
+            <div className="pt-2 border-t border-white/5">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 block">Template Library</span>
+              <div className="grid grid-cols-2 gap-2">
+                {DIGEST_TEMPLATES.map(template => {
+                  const isAdded = editingProfile.modules.some(m => m.template_id === template.template_id);
+                  const Icon = ICON_MAP[template.iconName] || Sparkles;
+                  return (
+                    <button
+                      key={template.template_id}
+                      onClick={async () => {
+                        if (isAdded) {
+                          const mod = editingProfile.modules.find(m => m.template_id === template.template_id);
+                          if (mod) await handleRemoveModule(mod.id);
+                        } else {
+                          await handleAddTemplate({ template_id: template.template_id });
+                        }
+                      }}
+                      className={clsx(
+                        "flex items-start gap-2.5 p-3 rounded-lg border text-left transition-all",
+                        isAdded
+                          ? "border-emerald-500/30 bg-emerald-500/5"
+                          : "border-white/5 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]"
+                      )}
+                    >
+                      <Icon size={14} className={`text-${template.accentColor}-400 mt-0.5 shrink-0`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-white truncate">{template.name}</span>
+                          {isAdded && <ToggleRight size={12} className="text-emerald-400 shrink-0" />}
+                        </div>
+                        <p className="text-[10px] text-slate-600 mt-0.5 line-clamp-2">{template.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+
+            {/* ── Add Custom Module ── */}
+            <button
+              onClick={() => setShowCustomModuleWizard(true)}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 border border-violet-500/20 transition-colors"
+            >
+              <Plus size={14} /> Create Custom Module
+            </button>
           </div>
         ) : (
           <div className="text-center py-4 text-slate-600 text-xs">
@@ -734,7 +1063,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       </Section>
 
       {/* Channels Section */}
-      <Section id="channels" title="Delivery Channels" icon={<Send size={16} className="text-emerald-400" />}>
+      <Section id="channels" title="Delivery Channels" icon={<Send size={16} className="text-emerald-400" />} expandedSection={expandedSection} onToggle={toggleSection} saveState={sectionSaveState.channels} onSave={editingProfile ? handleSaveChannels : undefined}>
         {editingProfile ? (
           <div className="space-y-3">
             {/* In-App (always on) */}
@@ -778,20 +1107,70 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               </button>
             )}
 
-            {/* Coming Soon Channels */}
-            <div className="flex gap-3 pt-1">
-              {[
-                { icon: '✈️', label: 'Telegram', note: 'Coming soon' },
-                { icon: '💬', label: 'Slack', note: 'Coming soon' },
-              ].map(ch => (
-                <div key={ch.label} className="flex-1 p-3 rounded-lg border border-white/5 bg-white/[0.01] opacity-40">
-                  <div className="flex items-center gap-2">
-                    <span>{ch.icon}</span>
-                    <span className="text-xs font-medium text-slate-500">{ch.label}</span>
-                    <span className="ml-auto text-[10px] text-slate-700">{ch.note}</span>
-                  </div>
+            {/* Telegram Channel */}
+            {editingProfile.channels.filter(c => c.channel_type === 'telegram').map(ch => (
+              <div key={ch.id} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
+                <Send size={16} className="text-blue-400" />
+                <div className="flex-1">
+                  <span className="text-sm font-medium text-white">Telegram</span>
+                  <p className="text-[10px] text-slate-600 truncate">Chat ID: {ch.channel_config?.chat_id}</p>
                 </div>
-              ))}
+                <button
+                  onClick={() => handleToggleChannel(ch.id, ch.is_active)}
+                  className="p-1 rounded hover:bg-white/10 transition-colors"
+                >
+                  {ch.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
+                </button>
+                <button
+                  onClick={() => handleDeleteChannel(ch.id)}
+                  className="p-1 rounded hover:bg-red-500/10 text-slate-600 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+
+            {/* Slack Channel */}
+            {editingProfile.channels.filter(c => c.channel_type === 'slack').map(ch => (
+              <div key={ch.id} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
+                <Send size={16} className="text-purple-400" />
+                <div className="flex-1">
+                  <span className="text-sm font-medium text-white">Slack</span>
+                  <p className="text-[10px] text-slate-600 truncate">Webhook configured</p>
+                </div>
+                <button
+                  onClick={() => handleToggleChannel(ch.id, ch.is_active)}
+                  className="p-1 rounded hover:bg-white/10 transition-colors"
+                >
+                  {ch.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
+                </button>
+                <button
+                  onClick={() => handleDeleteChannel(ch.id)}
+                  className="p-1 rounded hover:bg-red-500/10 text-slate-600 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+
+            {/* Add Telegram / Slack buttons */}
+            <div className="flex gap-2 pt-1">
+              {editingProfile.channels.filter(c => c.channel_type === 'telegram').length === 0 && (
+                <button
+                  onClick={() => setShowTelegramSetup(true)}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-xs font-medium bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors border border-white/10"
+                >
+                  <Send size={14} /> Add Telegram
+                </button>
+              )}
+              {editingProfile.channels.filter(c => c.channel_type === 'slack').length === 0 && (
+                <button
+                  onClick={() => setShowSlackSetup(true)}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-xs font-medium bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors border border-white/10"
+                >
+                  <Send size={14} /> Add Slack
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -835,13 +1214,209 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
         </div>
       </div>
 
-      {/* Template Selector Modal */}
+      {/* Template Selector Modal (kept for backward compat) */}
       {showTemplateSelector && (
         <DigestTemplateSelector
           onSelect={handleAddTemplate}
           onClose={() => setShowTemplateSelector(false)}
           existingTemplateIds={editingProfile?.modules.map(m => m.template_id).filter(Boolean) as string[] || []}
         />
+      )}
+
+      {/* Custom Module Wizard Modal */}
+      {showCustomModuleWizard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-violet-400" />
+                <h2 className="text-sm font-bold text-white">Create Custom Module</h2>
+              </div>
+              <button onClick={() => setShowCustomModuleWizard(false)} className="p-1 hover:bg-white/10 rounded-md text-slate-500 hover:text-white transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500">Describe what you want this module to analyse. AI will generate the system prompt for the sub-agent.</p>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Module Name</label>
+              <input
+                value={customModuleName}
+                onChange={e => setCustomModuleName(e.target.value)}
+                placeholder="e.g., Competitor Tracker"
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">What should this module look for?</label>
+              <textarea
+                value={customModuleLookFor}
+                onChange={e => setCustomModuleLookFor(e.target.value)}
+                placeholder="e.g., Track all mentions of competitor companies, their products, strategies and any threats or opportunities..."
+                rows={3}
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none resize-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">How should it prioritise findings?</label>
+              <textarea
+                value={customModulePrioritise}
+                onChange={e => setCustomModulePrioritise(e.target.value)}
+                placeholder="e.g., Prioritise by relevance to my active projects, then by recency..."
+                rows={2}
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none resize-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Preferred output format?</label>
+              <textarea
+                value={customModuleFormat}
+                onChange={e => setCustomModuleFormat(e.target.value)}
+                placeholder="e.g., Ranked bullet list with rationale for each item..."
+                rows={2}
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowCustomModuleWizard(false)}
+                className="px-4 py-2 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateCustomModule}
+                disabled={!customModuleName.trim() || customModuleGenerating}
+                className={clsx(
+                  "flex items-center gap-2 px-4 py-2 rounded-md text-xs font-bold transition-all",
+                  !customModuleName.trim() || customModuleGenerating
+                    ? "bg-slate-700 text-slate-500 cursor-not-allowed"
+                    : "bg-violet-500 hover:bg-violet-400 text-white shadow-[0_0_15px_rgba(139,92,246,0.3)]"
+                )}
+              >
+                {customModuleGenerating && <Loader2 size={14} className="animate-spin" />}
+                {customModuleGenerating ? 'Generating...' : 'Create Module'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Telegram Setup Modal */}
+      {showTelegramSetup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send size={16} className="text-blue-400" />
+                <h2 className="text-sm font-bold text-white">Set Up Telegram</h2>
+              </div>
+              <button onClick={() => setShowTelegramSetup(false)} className="p-1 hover:bg-white/10 rounded-md text-slate-500 hover:text-white transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20 text-[11px] text-slate-400 space-y-2">
+              <p className="font-medium text-blue-400">How to set up:</p>
+              <ol className="list-decimal ml-4 space-y-1">
+                <li>Message <span className="text-white font-mono">@BotFather</span> on Telegram</li>
+                <li>Create a new bot with <span className="text-white font-mono">/newbot</span></li>
+                <li>Copy the bot token provided</li>
+                <li>Start a chat with your bot, then visit <span className="text-white font-mono">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</span> to get your chat ID</li>
+              </ol>
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Bot Token</label>
+              <input
+                value={telegramBotToken}
+                onChange={e => setTelegramBotToken(e.target.value)}
+                placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white font-mono placeholder:text-slate-700 focus:border-blue-500/50 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Chat ID</label>
+              <input
+                value={telegramChatId}
+                onChange={e => setTelegramChatId(e.target.value)}
+                placeholder="e.g., 123456789"
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white font-mono placeholder:text-slate-700 focus:border-blue-500/50 focus:outline-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowTelegramSetup(false)} className="px-4 py-2 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleAddTelegramChannel}
+                disabled={!telegramBotToken.trim() || !telegramChatId.trim()}
+                className={clsx(
+                  "px-4 py-2 rounded-md text-xs font-bold transition-all",
+                  !telegramBotToken.trim() || !telegramChatId.trim()
+                    ? "bg-slate-700 text-slate-500 cursor-not-allowed"
+                    : "bg-blue-500 hover:bg-blue-400 text-white"
+                )}
+              >
+                Connect Telegram
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Slack Setup Modal */}
+      {showSlackSetup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send size={16} className="text-purple-400" />
+                <h2 className="text-sm font-bold text-white">Set Up Slack</h2>
+              </div>
+              <button onClick={() => setShowSlackSetup(false)} className="p-1 hover:bg-white/10 rounded-md text-slate-500 hover:text-white transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/20 text-[11px] text-slate-400 space-y-2">
+              <p className="font-medium text-purple-400">How to set up:</p>
+              <ol className="list-decimal ml-4 space-y-1">
+                <li>Go to <span className="text-white font-mono">api.slack.com/apps</span></li>
+                <li>Create a new app or select existing one</li>
+                <li>Enable <span className="text-white">Incoming Webhooks</span></li>
+                <li>Add a webhook to your desired channel and copy the URL</li>
+              </ol>
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Webhook URL</label>
+              <input
+                value={slackWebhookUrl}
+                onChange={e => setSlackWebhookUrl(e.target.value)}
+                placeholder="https://hooks.slack.com/services/..."
+                className="w-full px-3 py-2 rounded-md bg-black/30 border border-white/10 text-sm text-white font-mono placeholder:text-slate-700 focus:border-purple-500/50 focus:outline-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowSlackSetup(false)} className="px-4 py-2 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleAddSlackChannel}
+                disabled={!slackWebhookUrl.trim()}
+                className={clsx(
+                  "px-4 py-2 rounded-md text-xs font-bold transition-all",
+                  !slackWebhookUrl.trim()
+                    ? "bg-slate-700 text-slate-500 cursor-not-allowed"
+                    : "bg-purple-500 hover:bg-purple-400 text-white"
+                )}
+              >
+                Connect Slack
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1074,7 +1649,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                 </p>
               </div>
             </div>
-            <DigestViewer entry={selectedHistoryEntry} />
+            <DigestViewer entry={selectedHistoryEntry} channels={editingProfile?.channels} />
           </div>
         )}
       </div>
