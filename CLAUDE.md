@@ -26,6 +26,9 @@
 | Chrome extension | Browser Extension | `extension/` directory |
 | UI/styling changes | Styling and Theming | `utils/theme.ts`, Tailwind classes |
 | New lens/filter | Lenses | `constants.ts`, `components/GraphView.tsx` |
+| Orientation/digests | Orientation Engine | `components/OrientationCenter.tsx`, `services/digest.ts`, `services/digestAgents.ts` |
+| YouTube playlists | YouTube Playlist Ingestion | `components/youtube/PlaylistList.tsx`, `components/youtube/AddPlaylistModal.tsx`, `api/youtube/playlists.ts`, `api/youtube/poll-playlist.ts` |
+| Transcript extraction | Tiered Transcript Extraction | `services/transcriptExtractor.ts` |
 
 ### After Making Changes
 
@@ -90,9 +93,20 @@
 │   ├── Login.tsx              # Sign-in page
 │   └── Register.tsx           # Account creation page
 │
+├── components/youtube/         # YouTube Feature Module
+│   ├── YouTubeManager.tsx     # Main hub with tabs: channels, playlists, queue, history
+│   ├── PlaylistList.tsx       # Connected playlist cards with status/actions
+│   ├── AddPlaylistModal.tsx   # Playlist connection setup wizard
+│   ├── ChannelList.tsx        # Subscribed channel cards
+│   ├── AddChannelModal.tsx    # Channel subscription modal
+│   └── ...                    # Other YouTube components
+│
 ├── services/                  # Business Logic and API Integration
 │   ├── supabase.ts            # [14KB] All database operations
-│   └── gemini.ts              # [31KB] All AI operations
+│   ├── gemini.ts              # [31KB] All AI operations
+│   ├── transcriptExtractor.ts # Tiered transcript extraction (caption-extractor → Innertube → Apify)
+│   ├── digest.ts              # Digest CRUD (profiles, modules, channels, history)
+│   └── digestAgents.ts        # Digest AI orchestration (sub-agents + meta-agent)
 │
 ├── contexts/                  # React Context Providers
 │   └── AuthContext.tsx        # Supabase auth state management
@@ -221,6 +235,83 @@ created_at TIMESTAMPTZ
 user_id UUID
 ```
 
+### youtube_playlists
+
+```sql
+id UUID PRIMARY KEY
+user_id UUID                    -- FK to auth.users (RLS)
+playlist_id TEXT NOT NULL       -- YouTube playlist ID (PLxxxx)
+playlist_url TEXT NOT NULL
+playlist_name TEXT
+synapse_code TEXT NOT NULL      -- Generated code (e.g., SYN-7K3M)
+auto_process BOOLEAN            -- Auto-process new videos
+extraction_mode TEXT             -- comprehensive, strategic, etc.
+anchor_emphasis TEXT
+linked_anchor_ids UUID[]
+custom_instructions TEXT
+last_polled_at TIMESTAMPTZ
+known_video_count INTEGER
+total_videos_ingested INTEGER
+is_active BOOLEAN
+connection_status TEXT           -- pending, verified, error, disconnected
+connection_error TEXT
+```
+
+### digest_profiles
+
+```sql
+id UUID PRIMARY KEY
+user_id UUID                    -- FK to auth.users
+name TEXT NOT NULL              -- e.g., "Morning Brief"
+description TEXT
+frequency TEXT                  -- daily, weekly, monthly
+delivery_time TIME              -- When to deliver (user's timezone)
+timezone TEXT                   -- IANA timezone
+scope JSONB                     -- {"mode":"all_active"} or {"mode":"selected","anchor_ids":[]}
+density TEXT                    -- brief, standard, comprehensive
+is_active BOOLEAN
+last_generated_at TIMESTAMPTZ
+```
+
+### digest_modules
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+user_id UUID
+template_id TEXT                -- References config/digestTemplates.ts
+custom_name TEXT                -- For custom modules
+user_context TEXT               -- Additional user instructions
+tools_enabled JSONB             -- ["graph_query", "web_search"]
+sort_order INTEGER
+is_active BOOLEAN
+```
+
+### digest_channels
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+channel_type TEXT               -- email, telegram, slack
+channel_config JSONB            -- {"address":"user@example.com"}
+density_override TEXT           -- Optional per-channel density
+is_active BOOLEAN
+```
+
+### digest_history
+
+```sql
+id UUID PRIMARY KEY
+digest_profile_id UUID          -- FK to digest_profiles (CASCADE)
+user_id UUID
+content JSONB                   -- Full DigestOutput JSON
+module_outputs JSONB            -- Individual module results
+channels_delivered TEXT[]       -- Which channels received it
+status TEXT                     -- generating, completed, failed
+generation_time_ms INTEGER
+```
+
+
 ---
 
 ## Services Reference
@@ -273,6 +364,48 @@ user_id UUID
 **Utilities:**
 - `extractKeywordsFromQuery(query)` - LOCAL keyword extraction (no API)
 - `backfillEmbeddings(limit, callback)` - Batch generate embeddings
+
+### Digest Service (`services/digest.ts`)
+
+**Profile CRUD:**
+- `fetchDigestProfiles()` - List all user's digest profiles
+- `fetchDigestProfile(id)` - Get profile with modules + channels
+- `createDigestProfile(data)` - Create new profile
+- `updateDigestProfile(id, updates)` - Update profile settings
+- `deleteDigestProfile(id)` - Delete profile (cascades)
+
+**Module CRUD:**
+- `addDigestModule(data)` - Add module to profile
+- `updateDigestModule(id, updates)` - Update module settings
+- `deleteDigestModule(id)` - Remove module
+- `reorderDigestModules(profileId, moduleIds)` - Reorder modules
+
+**Channel CRUD:**
+- `addDigestChannel(data)` - Add delivery channel
+- `updateDigestChannel(id, updates)` - Update channel config
+- `deleteDigestChannel(id)` - Remove channel
+
+**History:**
+- `fetchDigestHistory(profileId?, limit?)` - Get delivery history
+- `saveDigestResult(result)` - Store generated digest
+
+### Digest Agents (`services/digestAgents.ts`)
+
+- `generateDigest(profileId, onProgress?)` - Full digest generation orchestration
+- `getTimeRange(frequency)` - Calculate reporting period
+
+### Transcript Extractor (`services/transcriptExtractor.ts`)
+
+- `extractTranscript(videoId, videoUrl, apifyApiKey?)` - Tiered extraction with fallback
+- `generatePlaylistCode()` - Generate unique SYN-XXXX code
+- `extractPlaylistId(url)` - Parse playlist ID from YouTube URL
+
+**Extraction tiers:**
+1. `youtube-caption-extractor` (free, fast, ~90% success)
+2. Innertube API direct (free, backup)
+3. Apify transcript scraper (paid, reliable)
+4. Manual fallback (no transcript available)
+
 
 ---
 
@@ -487,6 +620,14 @@ git branch -d feature/name
 | New database query | `services/supabase.ts` |
 | Modify chat | `components/ChatInterface.tsx` |
 | Add new lens | `constants.ts`, `GraphView.tsx` |
+| Add digest template | `config/digestTemplates.ts` |
+| Modify digest UI | `components/OrientationCenter.tsx` |
+| Modify digest generation | `services/digestAgents.ts`, `api/digest/generate.ts` |
+| Add delivery channel | `api/digest/deliver.ts`, `components/OrientationCenter.tsx` |
+| Add YouTube playlist feature | `components/youtube/PlaylistList.tsx`, `api/youtube/playlists.ts` |
+| Modify transcript extraction | `services/transcriptExtractor.ts` |
+| Modify playlist polling | `api/youtube/poll-playlist.ts` |
+
 
 ---
 

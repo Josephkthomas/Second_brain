@@ -112,94 +112,8 @@ async function verifyUserAuth(req: VercelRequest): Promise<{ user: { id: string 
   return { user: { id: user.id }, isCron: false };
 }
 
-// Apify transcript extraction
-// Using pintostudio/youtube-transcript-scraper which returns timestamped segments
-const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
-
-async function fetchTranscript(videoUrl: string, apifyApiKey: string): Promise<{
-  success: boolean;
-  transcript: string | null;
-  language: string | null;
-  error?: string;
-}> {
-  try {
-    // Start Actor run with waitForFinish to simplify the flow
-    const runResponse = await fetch(
-      `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apifyApiKey}`,
-        },
-        body: JSON.stringify({ videoUrl }),
-      }
-    );
-
-    if (!runResponse.ok) {
-      const errorBody = await runResponse.text();
-      console.error('[Process] Apify run failed:', runResponse.status, errorBody);
-      return { success: false, transcript: null, language: null, error: `Apify run failed: ${runResponse.status}` };
-    }
-
-    const runData = await runResponse.json();
-    const runId = runData.data?.id;
-    const status = runData.data?.status;
-
-    if (status !== 'SUCCEEDED') {
-      return { success: false, transcript: null, language: null, error: `Transcript extraction failed: ${status}` };
-    }
-
-    // Fetch results from dataset
-    const resultsResponse = await fetch(
-      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
-      { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
-    );
-
-    const results = await resultsResponse.json();
-
-    if (!results || results.length === 0) {
-      return { success: false, transcript: null, language: null, error: 'No transcript found' };
-    }
-
-    // The pintostudio actor returns { data: [{start, dur, text}, ...] }
-    // Concatenate all text segments into a single transcript
-    const firstResult = results[0];
-    let transcript: string;
-
-    if (firstResult.data && Array.isArray(firstResult.data)) {
-      // Format: [{start, dur, text}, ...]
-      transcript = firstResult.data
-        .map((segment: { text?: string }) => segment.text || '')
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    } else if (firstResult.transcript) {
-      // Some actors return transcript directly
-      transcript = firstResult.transcript;
-    } else {
-      return { success: false, transcript: null, language: null, error: 'Unexpected transcript format' };
-    }
-
-    if (!transcript || transcript.length < 50) {
-      return { success: false, transcript: null, language: null, error: 'Transcript too short or empty' };
-    }
-
-    return {
-      success: true,
-      transcript,
-      language: firstResult.language || 'en',
-    };
-  } catch (error) {
-    console.error('[Process] Transcript fetch error:', error);
-    return {
-      success: false,
-      transcript: null,
-      language: null,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
-}
+// Tiered transcript extraction (replaces single-tier Apify approach)
+import { extractTranscript } from '../../services/transcriptExtractor';
 
 // Extraction schema - comprehensive for knowledge graph
 const EXTRACTION_SCHEMA = {
@@ -549,10 +463,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id}, process_all: ${process_all})...`);
 
-    // Build query for pending items with channel info
+    // Build query for pending items with channel AND playlist info
     let query = supabase
       .from('youtube_ingestion_queue')
-      .select('*, youtube_channels(channel_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions)')
+      .select('*, youtube_channels(channel_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions), youtube_playlists(playlist_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions)')
       .eq('status', 'pending')
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })
@@ -593,14 +507,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
           .eq('id', item.id);
 
-        // Fetch transcript using global Apify API key
-        const transcriptResult = await fetchTranscript(item.video_url, APIFY_API_KEY);
+        // Fetch transcript using tiered extraction (free methods first, Apify as fallback)
+        const videoId = item.video_id || item.video_url.match(/[?&]v=([^&]+)/)?.[1] || '';
+        const transcriptResult = await extractTranscript(videoId, item.video_url, APIFY_API_KEY);
 
         if (!transcriptResult.success || !transcriptResult.transcript) {
           throw new Error(transcriptResult.error || 'Failed to fetch transcript');
         }
 
-        console.log(`[Process] Transcript fetched (${transcriptResult.transcript.length} chars)`);
+        console.log(`[Process] Transcript fetched via ${transcriptResult.method} (${transcriptResult.transcript.length} chars in ${transcriptResult.duration_ms}ms)`);
 
         // Update status to extracting
         await supabase
@@ -613,13 +528,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           })
           .eq('id', item.id);
 
-        // Get channel settings
-        const channelName = item.youtube_channels?.channel_name || 'Unknown Channel';
+        // Get extraction settings — prefer playlist settings for playlist-sourced items, fall back to channel
+        const playlistSettings = item.youtube_playlists;
+        const channelInfo = item.youtube_channels;
+        const channelName = playlistSettings?.playlist_name || channelInfo?.channel_name || 'Unknown Source';
         const channelSettings = {
-          extraction_mode: item.youtube_channels?.extraction_mode || 'comprehensive',
-          anchor_emphasis: item.youtube_channels?.anchor_emphasis || 'standard',
-          linked_anchor_ids: item.youtube_channels?.linked_anchor_ids || [],
-          custom_instructions: item.youtube_channels?.custom_instructions,
+          extraction_mode: playlistSettings?.extraction_mode || channelInfo?.extraction_mode || 'comprehensive',
+          anchor_emphasis: playlistSettings?.anchor_emphasis || channelInfo?.anchor_emphasis || 'standard',
+          linked_anchor_ids: playlistSettings?.linked_anchor_ids || channelInfo?.linked_anchor_ids || [],
+          custom_instructions: playlistSettings?.custom_instructions || channelInfo?.custom_instructions,
         };
 
         // Fetch linked anchors if any are configured
@@ -863,14 +780,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           })
           .eq('id', item.id);
 
-        // Update channel stats
-        await supabase
-          .from('youtube_channels')
-          .update({
-            total_videos_ingested: (item.youtube_channels as any)?.total_videos_ingested + 1 || 1,
-            last_video_published_at: item.published_at,
-          })
-          .eq('id', item.channel_id);
+        // Update source stats (channel or playlist)
+        if (item.playlist_source_id) {
+          await supabase.rpc('increment_playlist_ingested', { playlist_id: item.playlist_source_id }).catch(() => {
+            // Fallback: manual update if RPC not available
+            supabase
+              .from('youtube_playlists')
+              .update({ total_videos_ingested: (playlistSettings as any)?.total_videos_ingested + 1 || 1 })
+              .eq('id', item.playlist_source_id);
+          });
+        } else if (item.channel_id) {
+          await supabase
+            .from('youtube_channels')
+            .update({
+              total_videos_ingested: (item.youtube_channels as any)?.total_videos_ingested + 1 || 1,
+              last_video_published_at: item.published_at,
+            })
+            .eq('id', item.channel_id);
+        }
 
         // Update user's daily count
         const { data: userSettings } = await supabase

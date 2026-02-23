@@ -2,19 +2,21 @@
 // Displays channels, queue, and settings tabs
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Youtube, Plus, Settings, RefreshCw, Loader2, AlertCircle, Wrench } from 'lucide-react';
+import { Youtube, Plus, Settings, RefreshCw, Loader2, AlertCircle, Wrench, ListVideo } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { getSupabase, getCurrentUserId } from '../../services/supabase';
-import type { YouTubeChannel, YouTubeQueueItem, YouTubeSettings, YouTubeStats } from '../../types/youtube';
+import type { YouTubeChannel, YouTubeQueueItem, YouTubeSettings, YouTubeStats, YouTubePlaylist } from '../../types/youtube';
 import ChannelList from './ChannelList';
+import PlaylistList from './PlaylistList';
 import QueueStatusPanel from './QueueStatusPanel';
 import ScanHistoryPanel from './ScanHistoryPanel';
 import AddChannelModal from './AddChannelModal';
+import AddPlaylistModal from './AddPlaylistModal';
 import YouTubeSettingsModal from './YouTubeSettingsModal';
 import ChannelRepairModal from './ChannelRepairModal';
 
-type TabType = 'channels' | 'queue' | 'history';
+type TabType = 'channels' | 'playlists' | 'queue' | 'history';
 
 interface YouTubeManagerProps {
   onComplete?: () => void;
@@ -30,7 +32,9 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
   const [stats, setStats] = useState<YouTubeStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [playlists, setPlaylists] = useState<YouTubePlaylist[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showAddPlaylistModal, setShowAddPlaylistModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRepairModal, setShowRepairModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -63,6 +67,13 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
         throw new Error(queueData.error || `Failed to fetch queue (${queueRes.status})`);
       }
       setQueueItems(queueData.items || []);
+
+      // Fetch playlists
+      const playlistsRes = await fetch('/api/youtube/playlists', { headers });
+      const playlistsData = await playlistsRes.json();
+      if (playlistsRes.ok) {
+        setPlaylists(playlistsData.playlists || []);
+      }
 
       // Fetch settings
       const settingsRes = await fetch('/api/youtube/settings', { headers });
@@ -120,6 +131,12 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
     fetchData();
   };
 
+  // Playlist added handler
+  const handlePlaylistAdded = () => {
+    setShowAddPlaylistModal(false);
+    fetchData();
+  };
+
   // Settings updated handler
   const handleSettingsUpdated = () => {
     setShowSettingsModal(false);
@@ -146,7 +163,7 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
           <div>
             <h2 className="text-xl font-bold text-white">YouTube Auto-Ingest</h2>
             <p className="text-sm text-slate-400">
-              Automatically capture knowledge from YouTube channels
+              Automatically capture knowledge from YouTube channels and playlists
             </p>
           </div>
         </div>
@@ -177,22 +194,36 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
             <Settings className="w-5 h-5" />
           </button>
 
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Channel
-          </button>
+          {activeTab === 'playlists' ? (
+            <button
+              onClick={() => setShowAddPlaylistModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Connect Playlist
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Channel
+            </button>
+          )}
         </div>
       </div>
 
       {/* Stats Bar */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-5 gap-3 mb-6">
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
             <div className="text-2xl font-bold text-white">{stats.total_channels}</div>
             <div className="text-xs text-slate-400">Channels</div>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+            <div className="text-2xl font-bold text-purple-400">{playlists.length}</div>
+            <div className="text-xs text-slate-400">Playlists</div>
           </div>
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
             <div className="text-2xl font-bold text-amber-400">{stats.pending_videos}</div>
@@ -233,6 +264,17 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
           Channels ({channels.length})
         </button>
         <button
+          onClick={() => setActiveTab('playlists')}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all',
+            activeTab === 'playlists'
+              ? 'bg-slate-800 text-white shadow-sm'
+              : 'text-slate-500 hover:text-slate-300'
+          )}
+        >
+          Playlists ({playlists.length})
+        </button>
+        <button
           onClick={() => setActiveTab('queue')}
           className={clsx(
             'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all',
@@ -267,6 +309,14 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
           />
         )}
 
+        {activeTab === 'playlists' && (
+          <PlaylistList
+            playlists={playlists}
+            onRefresh={fetchData}
+            onAddPlaylist={() => setShowAddPlaylistModal(true)}
+          />
+        )}
+
         {activeTab === 'queue' && (
           <QueueStatusPanel
             items={queueItems}
@@ -285,6 +335,13 @@ export default function YouTubeManager({ onComplete, onGraphUpdate }: YouTubeMan
         <AddChannelModal
           onClose={() => setShowAddModal(false)}
           onSuccess={handleChannelAdded}
+        />
+      )}
+
+      {showAddPlaylistModal && (
+        <AddPlaylistModal
+          onClose={() => setShowAddPlaylistModal(false)}
+          onSuccess={handlePlaylistAdded}
         />
       )}
 
