@@ -184,7 +184,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('id')
         .eq('user_id', user.id)
         .eq('playlist_id', playlistId)
-        .single();
+        .maybeSingle();
 
       if (existing) {
         return res.status(409).json({ error: 'This playlist is already connected' });
@@ -200,28 +200,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const synapseCode = generatePlaylistCode();
 
       // Insert playlist
+      const insertPayload = {
+        user_id: user.id,
+        playlist_id: playlistId,
+        playlist_url: playlist_url.trim(),
+        playlist_name: verification.title,
+        synapse_code: synapseCode,
+        thumbnail_url: verification.thumbnailUrl,
+        auto_process: Boolean(auto_process),
+        extraction_mode: String(extraction_mode || 'comprehensive'),
+        anchor_emphasis: String(anchor_emphasis || 'standard'),
+        linked_anchor_ids: validAnchorIds,
+        custom_instructions: custom_instructions || null,
+        known_video_count: Number(verification.itemCount) || 0,
+        connection_status: 'verified',
+        is_active: true,
+      };
+
       const { data, error } = await supabase
         .from('youtube_playlists')
-        .insert({
-          user_id: user.id,
-          playlist_id: playlistId,
-          playlist_url: playlist_url.trim(),
-          playlist_name: verification.title,
-          synapse_code: synapseCode,
-          thumbnail_url: verification.thumbnailUrl,
-          auto_process,
-          extraction_mode,
-          anchor_emphasis,
-          linked_anchor_ids: validAnchorIds,
-          custom_instructions,
-          known_video_count: verification.itemCount,
-          connection_status: 'verified',
-          is_active: true,
-        })
+        .insert(insertPayload)
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('[playlists] Insert error:', JSON.stringify(error));
+        return res.status(400).json({
+          error: error.message || 'Failed to save playlist',
+          code: error.code,
+          details: error.details || error.hint,
+        });
+      }
 
       // Immediately queue existing playlist videos for processing
       if (data) {
@@ -298,11 +307,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
 
   } catch (error: any) {
-    console.error('[playlists] API error:', error);
+    console.error('[playlists] API error:', JSON.stringify(error, null, 2));
+    const message = error?.message || 'Internal server error';
+    const details = error?.details || error?.hint || '';
     return res.status(500).json({
-      error: error?.message || 'Internal server error',
+      error: details ? `${message} — ${details}` : message,
       code: error?.code,
-      details: error?.details || error?.hint,
     });
   }
 }

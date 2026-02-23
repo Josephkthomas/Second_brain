@@ -56,9 +56,39 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
     loadAnchors();
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Validate URL looks like a YouTube playlist
+  const validatePlaylistUrl = (url: string): string | null => {
+    const trimmed = url.trim();
+    if (!trimmed) return 'Please enter a playlist URL';
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname.includes('youtube.com') && !parsed.hostname.includes('youtu.be')) {
+        return 'URL must be from youtube.com';
+      }
+      const listParam = parsed.searchParams.get('list');
+      if (!listParam) {
+        return 'URL must contain a ?list= parameter. Copy the full URL from your YouTube playlist page.';
+      }
+      return null;
+    } catch {
+      // Not a valid URL — check if it has a list param anyway
+      if (!/[?&]list=/.test(trimmed)) {
+        return 'Invalid URL. Paste the full YouTube playlist URL (e.g., https://www.youtube.com/playlist?list=PLxxxxxx)';
+      }
+      return null;
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent | React.MouseEvent) => {
     e.preventDefault();
     if (!session?.access_token || !playlistUrl.trim()) return;
+
+    // Client-side URL validation
+    const urlError = validatePlaylistUrl(playlistUrl);
+    if (urlError) {
+      setError(urlError);
+      return;
+    }
 
     try {
       setIsSubmitting(true);
@@ -83,7 +113,9 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to connect playlist');
+        // Include error code/details if available for debugging
+        const detail = data.code ? ` [${data.code}]` : '';
+        throw new Error((data.error || 'Failed to connect playlist') + detail);
       }
 
       onSuccess();
