@@ -532,7 +532,13 @@ const MainApp: React.FC = () => {
            </div>
            <div className="h-full pt-20 pb-6 px-6 overflow-y-auto">
               <div className="max-w-4xl mx-auto w-full h-full">
-                <QueueHub onGraphUpdate={handleGraphUpdate} />
+                <QueueHub
+                  onGraphUpdate={handleGraphUpdate}
+                  onViewSource={(sourceId) => {
+                    handleSourceSelect(sourceId);
+                    setShowQueuePanel(false);
+                  }}
+                />
               </div>
            </div>
         </div>
