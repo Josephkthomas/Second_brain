@@ -5,6 +5,7 @@ import {
   Sparkles, Clock, Play, Trash2, ToggleLeft, ToggleRight, GripVertical,
   Mail, Send, History, Settings2, ArrowUp, ArrowDown, Eye,
   Brain, Database, Cpu, CheckCircle2, XCircle, Loader2, Zap, BarChart3,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -14,7 +15,7 @@ import {
   fetchDigestHistory,
 } from '../services/digest';
 import { fetchAnchors } from '../services/supabase';
-import { getDigestTemplate, DIGEST_TEMPLATES } from '../config/digestTemplates';
+import { getDigestTemplate, DIGEST_TEMPLATES, getDigestTemplatesByFrequency, TEMPLATE_CATEGORY_LABELS } from '../config/digestTemplates';
 import { DigestTemplateSelector } from './DigestTemplateSelector';
 import { DigestViewer } from './DigestViewer';
 import { generateDigest, generateCustomModulePrompt } from '../services/digestAgents';
@@ -26,6 +27,8 @@ import type {
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap, Sparkles,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
+  Compass, BarChart3,
 };
 
 const FREQUENCY_LABELS: Record<ScheduleFrequency, string> = {
@@ -98,10 +101,10 @@ const Section: React.FC<{
 }> = ({ id, title, icon, expandedSection, onToggle, saveState, onSave, children }) => {
   const isExpanded = expandedSection === id;
   return (
-    <div className="border border-white/10 rounded-lg overflow-hidden">
+    <div className="border border-white/10 rounded-lg">
       <button
         onClick={() => onToggle(id)}
-        className="w-full flex items-center justify-between p-4 bg-cyber-slate/30 hover:bg-cyber-slate/50 transition-colors"
+        className="w-full flex items-center justify-between p-4 bg-cyber-slate/30 hover:bg-cyber-slate/50 transition-colors rounded-t-lg"
       >
         <div className="flex items-center gap-3">
           {icon}
@@ -112,7 +115,7 @@ const Section: React.FC<{
         {isExpanded ? <ChevronUp size={16} className="text-slate-500" /> : <ChevronDown size={16} className="text-slate-500" />}
       </button>
       {isExpanded && (
-        <div className="p-4 space-y-4 bg-cyber-slate/10">
+        <div className="p-4 space-y-4 bg-cyber-slate/10 rounded-b-lg">
           {children}
           {onSave && (
             <div className="pt-2 border-t border-white/5 flex justify-end">
@@ -136,6 +139,89 @@ const Section: React.FC<{
           )}
         </div>
       )}
+    </div>
+  );
+};
+
+// ─── Channel Card Component (defined OUTSIDE to prevent remount) ──
+const ChannelCard: React.FC<{
+  channel: DigestChannel;
+  icon: React.ReactNode;
+  label: string;
+  onToggle: (channelId: string, currentActive: boolean) => void;
+  onDelete?: (channelId: string) => void;
+  onUpdateDensity: (channelId: string, density: DensityLevel | null) => void;
+  onUpdateFormat: (channelId: string, instructions: string) => void;
+  children?: React.ReactNode;
+}> = ({ channel, icon, label, onToggle, onDelete, onUpdateDensity, onUpdateFormat, children }) => {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 p-3 border-b border-white/5">
+        {icon}
+        <span className="text-sm font-medium text-white flex-1">{label}</span>
+        <span className={clsx(
+          "text-[10px] px-1.5 py-0.5 rounded",
+          channel.is_active ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-700/50 text-slate-500"
+        )}>
+          {channel.is_active ? 'Connected' : 'Disabled'}
+        </span>
+        <button
+          onClick={() => onToggle(channel.id, channel.is_active)}
+          className="p-1 rounded hover:bg-white/10 transition-colors"
+        >
+          {channel.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="p-3 space-y-3">
+        {/* Channel-specific config (children slot) */}
+        {children}
+
+        {/* Density Override */}
+        <div>
+          <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wider mb-1.5 block">Density Override</label>
+          <div className="flex gap-1">
+            {([null, 'brief', 'standard', 'comprehensive'] as (DensityLevel | null)[]).map(d => (
+              <button
+                key={d ?? 'default'}
+                onClick={() => onUpdateDensity(channel.id, d)}
+                className={clsx(
+                  "flex-1 px-2 py-1.5 rounded text-[10px] font-medium transition-colors border",
+                  channel.density_override === d
+                    ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
+                    : "bg-white/[0.02] text-slate-500 border-white/5 hover:bg-white/5 hover:text-slate-300"
+                )}
+              >
+                {d === null ? 'Default' : DENSITY_LABELS[d]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Format Instructions */}
+        <div>
+          <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wider mb-1.5 block">Format Instructions</label>
+          <textarea
+            defaultValue={channel.format_instructions || ''}
+            onBlur={e => onUpdateFormat(channel.id, e.target.value)}
+            placeholder="e.g. Keep it concise, use bullet points..."
+            rows={2}
+            className="w-full px-2.5 py-1.5 rounded bg-black/20 border border-white/5 text-xs text-slate-300 placeholder:text-slate-700 focus:border-cyan-500/30 focus:outline-none resize-none"
+          />
+        </div>
+
+        {/* Delete */}
+        {onDelete && (
+          <button
+            onClick={() => onDelete(channel.id)}
+            className="flex items-center gap-1.5 text-[10px] text-slate-600 hover:text-red-400 transition-colors"
+          >
+            <Trash2 size={10} /> Remove channel
+          </button>
+        )}
+      </div>
     </div>
   );
 };
@@ -554,6 +640,18 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       const updated = await fetchDigestProfile(editingProfile.id);
       if (updated) setEditingProfile(updated);
     }
+  };
+
+  const handleUpdateChannelDensity = async (channelId: string, density: DensityLevel | null) => {
+    await updateDigestChannel(channelId, { density_override: density });
+    if (editingProfile) {
+      const updated = await fetchDigestProfile(editingProfile.id);
+      if (updated) setEditingProfile(updated);
+    }
+  };
+
+  const handleUpdateChannelFormat = async (channelId: string, instructions: string) => {
+    await updateDigestChannel(channelId, { format_instructions: instructions || null });
   };
 
   if (!isOpen) return null;
@@ -1008,43 +1106,62 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                 );
               })
             )}
-            {/* ── Inline Template Library ── */}
+            {/* ── Inline Template Library (filtered by frequency) ── */}
             <div className="pt-2 border-t border-white/5">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 block">Template Library</span>
-              <div className="grid grid-cols-2 gap-2">
-                {DIGEST_TEMPLATES.map(template => {
-                  const isAdded = editingProfile.modules.some(m => m.template_id === template.template_id);
-                  const Icon = ICON_MAP[template.iconName] || Sparkles;
-                  return (
-                    <button
-                      key={template.template_id}
-                      onClick={async () => {
-                        if (isAdded) {
-                          const mod = editingProfile.modules.find(m => m.template_id === template.template_id);
-                          if (mod) await handleRemoveModule(mod.id);
-                        } else {
-                          await handleAddTemplate({ template_id: template.template_id });
-                        }
-                      }}
-                      className={clsx(
-                        "flex items-start gap-2.5 p-3 rounded-lg border text-left transition-all",
-                        isAdded
-                          ? "border-emerald-500/30 bg-emerald-500/5"
-                          : "border-white/5 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]"
-                      )}
-                    >
-                      <Icon size={14} className={`text-${template.accentColor}-400 mt-0.5 shrink-0`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-white truncate">{template.name}</span>
-                          {isAdded && <ToggleRight size={12} className="text-emerald-400 shrink-0" />}
-                        </div>
-                        <p className="text-[10px] text-slate-600 mt-0.5 line-clamp-2">{template.description}</p>
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Template Library</span>
+                <span className="text-[10px] text-slate-600 bg-white/5 px-1.5 py-0.5 rounded">{FREQUENCY_LABELS[formFrequency]}</span>
               </div>
+              {(() => {
+                const filteredTemplates = getDigestTemplatesByFrequency(formFrequency);
+                const categories = [...new Set(filteredTemplates.map(t => t.category))];
+                return (
+                  <div className="space-y-3">
+                    {categories.map(cat => {
+                      const catTemplates = filteredTemplates.filter(t => t.category === cat);
+                      return (
+                        <div key={cat}>
+                          <span className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mb-1.5 block">{TEMPLATE_CATEGORY_LABELS[cat] || cat}</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            {catTemplates.map(template => {
+                              const isAdded = editingProfile.modules.some(m => m.template_id === template.template_id);
+                              const Icon = ICON_MAP[template.iconName] || Sparkles;
+                              return (
+                                <button
+                                  key={template.template_id}
+                                  onClick={async () => {
+                                    if (isAdded) {
+                                      const mod = editingProfile.modules.find(m => m.template_id === template.template_id);
+                                      if (mod) await handleRemoveModule(mod.id);
+                                    } else {
+                                      await handleAddTemplate({ template_id: template.template_id });
+                                    }
+                                  }}
+                                  className={clsx(
+                                    "flex items-start gap-2.5 p-3 rounded-lg border text-left transition-all",
+                                    isAdded
+                                      ? "border-emerald-500/30 bg-emerald-500/5"
+                                      : "border-white/5 bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]"
+                                  )}
+                                >
+                                  <Icon size={14} className={`text-${template.accentColor}-400 mt-0.5 shrink-0`} />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs font-medium text-white truncate">{template.name}</span>
+                                      {isAdded && <ToggleRight size={12} className="text-emerald-400 shrink-0" />}
+                                    </div>
+                                    <p className="text-[10px] text-slate-600 mt-0.5 line-clamp-2">{template.description}</p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* ── Add Custom Module ── */}
@@ -1076,28 +1193,30 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">Always On</span>
             </div>
 
-            {/* Email channels */}
+            {/* Email Channel Card */}
             {editingProfile.channels.filter(c => c.channel_type === 'email').map(ch => (
-              <div key={ch.id} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
-                <Mail size={16} className="text-blue-400" />
-                <div className="flex-1">
+              <ChannelCard
+                key={ch.id}
+                channel={ch}
+                icon={<Mail size={16} className="text-blue-400" />}
+                label="Email"
+                onToggle={handleToggleChannel}
+                onUpdateDensity={handleUpdateChannelDensity}
+                onUpdateFormat={handleUpdateChannelFormat}
+              >
+                <div>
+                  <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wider mb-1.5 block">Email Address</label>
                   <input
                     defaultValue={ch.channel_config?.address || ''}
                     onBlur={e => handleUpdateChannelConfig(ch.id, { address: e.target.value })}
                     placeholder="your@email.com"
-                    className="w-full px-2.5 py-1 rounded bg-black/20 border border-white/5 text-xs text-slate-300 placeholder:text-slate-700 focus:border-cyan-500/30 focus:outline-none"
+                    className="w-full px-2.5 py-1.5 rounded bg-black/20 border border-white/5 text-xs text-slate-300 placeholder:text-slate-700 focus:border-cyan-500/30 focus:outline-none"
                   />
                 </div>
-                <button
-                  onClick={() => handleToggleChannel(ch.id, ch.is_active)}
-                  className="p-1 rounded hover:bg-white/10 transition-colors"
-                >
-                  {ch.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
-                </button>
-              </div>
+              </ChannelCard>
             ))}
 
-            {/* Add channel */}
+            {/* Add Email button */}
             {editingProfile.channels.filter(c => c.channel_type === 'email').length === 0 && (
               <button
                 onClick={handleAddEmailChannel}
@@ -1107,50 +1226,36 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               </button>
             )}
 
-            {/* Telegram Channel */}
+            {/* Telegram Channel Card */}
             {editingProfile.channels.filter(c => c.channel_type === 'telegram').map(ch => (
-              <div key={ch.id} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
-                <Send size={16} className="text-blue-400" />
-                <div className="flex-1">
-                  <span className="text-sm font-medium text-white">Telegram</span>
-                  <p className="text-[10px] text-slate-600 truncate">Chat ID: {ch.channel_config?.chat_id}</p>
-                </div>
-                <button
-                  onClick={() => handleToggleChannel(ch.id, ch.is_active)}
-                  className="p-1 rounded hover:bg-white/10 transition-colors"
-                >
-                  {ch.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
-                </button>
-                <button
-                  onClick={() => handleDeleteChannel(ch.id)}
-                  className="p-1 rounded hover:bg-red-500/10 text-slate-600 hover:text-red-400 transition-colors"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
+              <ChannelCard
+                key={ch.id}
+                channel={ch}
+                icon={<Send size={16} className="text-blue-400" />}
+                label="Telegram"
+                onToggle={handleToggleChannel}
+                onDelete={handleDeleteChannel}
+                onUpdateDensity={handleUpdateChannelDensity}
+                onUpdateFormat={handleUpdateChannelFormat}
+              >
+                <p className="text-[10px] text-slate-500">Chat ID: <span className="font-mono text-slate-400">{ch.channel_config?.chat_id}</span></p>
+              </ChannelCard>
             ))}
 
-            {/* Slack Channel */}
+            {/* Slack Channel Card */}
             {editingProfile.channels.filter(c => c.channel_type === 'slack').map(ch => (
-              <div key={ch.id} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
-                <Send size={16} className="text-purple-400" />
-                <div className="flex-1">
-                  <span className="text-sm font-medium text-white">Slack</span>
-                  <p className="text-[10px] text-slate-600 truncate">Webhook configured</p>
-                </div>
-                <button
-                  onClick={() => handleToggleChannel(ch.id, ch.is_active)}
-                  className="p-1 rounded hover:bg-white/10 transition-colors"
-                >
-                  {ch.is_active ? <ToggleRight size={16} className="text-emerald-400" /> : <ToggleLeft size={16} className="text-slate-500" />}
-                </button>
-                <button
-                  onClick={() => handleDeleteChannel(ch.id)}
-                  className="p-1 rounded hover:bg-red-500/10 text-slate-600 hover:text-red-400 transition-colors"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
+              <ChannelCard
+                key={ch.id}
+                channel={ch}
+                icon={<Send size={16} className="text-purple-400" />}
+                label="Slack"
+                onToggle={handleToggleChannel}
+                onDelete={handleDeleteChannel}
+                onUpdateDensity={handleUpdateChannelDensity}
+                onUpdateFormat={handleUpdateChannelFormat}
+              >
+                <p className="text-[10px] text-slate-500">Webhook configured</p>
+              </ChannelCard>
             ))}
 
             {/* Add Telegram / Slack buttons */}

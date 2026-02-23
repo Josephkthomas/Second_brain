@@ -1,11 +1,15 @@
 import React from 'react';
 import {
   X, FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
+  Sparkles, TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart,
+  Anchor, Lightbulb, Compass, BarChart3,
 } from 'lucide-react';
-import { DIGEST_TEMPLATES, type DigestTemplateDefinition } from '../config/digestTemplates';
+import { DIGEST_TEMPLATES, TEMPLATE_CATEGORY_LABELS, type DigestTemplateDefinition } from '../config/digestTemplates';
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
-  FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
+  FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap, Sparkles,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
+  Compass, BarChart3,
 };
 
 const ACCENT_MAP: Record<string, string> = {
@@ -33,12 +37,7 @@ interface Props {
 }
 
 export const DigestTemplateSelector: React.FC<Props> = ({ onSelect, onClose, existingTemplateIds }) => {
-  const categories = [
-    { key: 'strategic', label: 'Strategic' },
-    { key: 'operational', label: 'Operational' },
-    { key: 'social', label: 'Social' },
-    { key: 'analytical', label: 'Analytical' },
-  ];
+  const categories = Object.entries(TEMPLATE_CATEGORY_LABELS).map(([key, label]) => ({ key, label }));
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>

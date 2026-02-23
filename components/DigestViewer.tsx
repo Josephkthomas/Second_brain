@@ -3,6 +3,8 @@ import {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
   Sparkles, Clock, BarChart3, ArrowRight, ChevronDown, ChevronUp,
   Mail, Zap, Eye, FileText, Send, Loader2, CheckCircle2, XCircle,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
+  Compass,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,6 +12,8 @@ import type { DigestOutput, DigestHistoryEntry, DigestChannel } from '../types/d
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap, Sparkles,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
+  Compass, BarChart3,
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
