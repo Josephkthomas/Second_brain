@@ -57,20 +57,10 @@ const TEMPLATE_PROMPTS: Record<string, { name: string; icon: string; systemPromp
     icon: 'Users',
     systemPrompt: `You are a relationship analyst. Identify all Person nodes and analyse: (1) Most active recently, (2) Pending action items involving them, (3) Gone quiet despite active connections, (4) Relationship clusters. Highlight follow-up opportunities.`,
   },
-  attention_map: {
-    name: 'Attention Map',
-    icon: 'Radar',
-    systemPrompt: `You are an attention analyst. Analyse distribution of recent content across topics and projects. Identify: (1) Top 5 topics by volume, (2) Growing vs. declining topics, (3) Attention imbalances, (4) New topics in this period. Use percentages where helpful.`,
-  },
   signals_alerts: {
     name: 'Signals & Alerts',
     icon: 'AlertTriangle',
     systemPrompt: `You are an anomaly detector. Identify: (1) Stale commitments >7 days old, (2) Orphaned nodes with few connections, (3) Risk/Blocker nodes gaining connections, (4) Topic surges across 3+ sources, (5) Recent contradictions. Prioritise by impact.`,
-  },
-  learning_gaps: {
-    name: 'Learning & Knowledge Gaps',
-    icon: 'GraduationCap',
-    systemPrompt: `You are a learning analyst. Identify: (1) Topics in active projects with few supporting nodes, (2) Unresolved Questions/Hypotheses, (3) Frequent concepts lacking evidence, (4) Skills in goals lacking learning content. Suggest what would fill each gap.`,
   },
 };
 
@@ -81,7 +71,8 @@ async function executeSubAgent(
   graphContext: { nodes: any[]; edges: any[]; anchors: any[] },
   frequency: string,
   density: string,
-  timeRange: { from: string; to: string }
+  timeRange: { from: string; to: string },
+  scope?: { mode: string; anchor_ids?: string[] }
 ) {
   const ai = getGenAI();
   const tmpl = mod.template_id ? TEMPLATE_PROMPTS[mod.template_id] : null;
@@ -100,11 +91,15 @@ async function executeSubAgent(
     `- [Anchor] ${a.label} (${a.entity_type})`
   ).join('\n');
 
+  const scopeNote = scope?.mode === 'selected'
+    ? `\n=== SCOPE ===\nThis digest focuses on selected anchors only. Only the anchors listed below are in scope. Do NOT flag unlisted anchors as neglected or missing.\n`
+    : '';
+
   const prompt = `${systemPrompt}
 
 === CONTEXT ===
 Period: ${timeRange.from.slice(0, 10)} to ${timeRange.to.slice(0, 10)} | Frequency: ${frequency} | Density: ${density}
-
+${scopeNote}
 === ANCHORS ===
 ${anchorSummary || '(None)'}
 
@@ -162,12 +157,16 @@ Provide your analysis as structured JSON. The "content" field should be your ful
 
 // ─── Meta-Agent ─────────────────────────────────────────────
 
-async function runMetaAgent(moduleOutputs: any[], frequency: string, density: string) {
+async function runMetaAgent(moduleOutputs: any[], frequency: string, density: string, scope?: { mode: string; anchor_ids?: string[] }) {
   const ai = getGenAI();
   const summaries = moduleOutputs.map(o => `--- ${o.module_name} ---\n${o.content}`).join('\n\n');
 
-  const prompt = `You synthesise intelligence module outputs into a coherent briefing.
+  const scopeInstruction = scope?.mode === 'selected'
+    ? `\nScope: This digest focuses on selected anchors only. Do not reference or flag anchors outside the selected scope.\n`
+    : '';
 
+  const prompt = `You synthesise intelligence module outputs into a coherent briefing.
+${scopeInstruction}
 === MODULE OUTPUTS ===
 ${summaries}
 
@@ -277,23 +276,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .lte('created_at', timeRange.to)
       .limit(200);
 
-    const { data: anchors } = await supabase
+    const { data: allAnchors } = await supabase
       .from('knowledge_nodes')
       .select('id, label, entity_type, description')
       .eq('user_id', user.id)
       .eq('is_anchor', true);
 
-    const graphContext = { nodes: nodes || [], edges: edges || [], anchors: anchors || [] };
+    // Filter anchors by profile scope
+    const scope = profile.scope as { mode: string; anchor_ids?: string[] } | undefined;
+    const filteredAnchors = (scope?.mode === 'selected' && scope.anchor_ids?.length)
+      ? (allAnchors || []).filter((a: any) => scope.anchor_ids!.includes(a.id))
+      : (allAnchors || []);
+
+    const graphContext = { nodes: nodes || [], edges: edges || [], anchors: filteredAnchors };
 
     // Execute sub-agents sequentially
     const moduleOutputs = [];
     for (const mod of modules) {
-      const output = await executeSubAgent(mod, graphContext, profile.frequency, profile.density, timeRange);
+      const output = await executeSubAgent(mod, graphContext, profile.frequency, profile.density, timeRange, scope);
       moduleOutputs.push(output);
     }
 
     // Run meta-agent
-    const meta = await runMetaAgent(moduleOutputs, profile.frequency, profile.density);
+    const meta = await runMetaAgent(moduleOutputs, profile.frequency, profile.density, scope);
 
     const generationTime = Date.now() - startTime;
 

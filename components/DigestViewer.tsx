@@ -39,13 +39,13 @@ interface Props {
   channels?: DigestChannel[];
 }
 
-type DeliveryStatus = 'idle' | 'delivering' | 'delivered' | 'error';
+type DeliveryState = { status: 'idle' } | { status: 'delivering' } | { status: 'delivered' } | { status: 'error'; message?: string };
 
 export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
   const output = entry.content as DigestOutput;
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
   const [showDeliverMenu, setShowDeliverMenu] = useState(false);
-  const [deliveryStatus, setDeliveryStatus] = useState<Record<string, DeliveryStatus>>({});
+  const [deliveryStatus, setDeliveryStatus] = useState<Record<string, DeliveryState>>({});
   const { session } = useAuth();
 
   if (!output || !output.executive_summary) {
@@ -79,9 +79,10 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
 
     const targetsToDeliver = channelTypes || activeChannels.map(ch => ch.channel_type);
     for (const ct of targetsToDeliver) {
-      setDeliveryStatus(prev => ({ ...prev, [ct]: 'delivering' }));
+      setDeliveryStatus(prev => ({ ...prev, [ct]: { status: 'delivering' } }));
     }
 
+    let hasSuccess = false;
     try {
       const response = await fetch('/api/digest/deliver', {
         method: 'POST',
@@ -98,24 +99,42 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
       const data = await response.json();
       if (data.success && data.results) {
         for (const [ct, result] of Object.entries(data.results)) {
+          const isDelivered = (result as string) === 'delivered';
+          if (isDelivered) hasSuccess = true;
           setDeliveryStatus(prev => ({
             ...prev,
-            [ct]: (result as string) === 'delivered' ? 'delivered' : 'error',
+            [ct]: isDelivered
+              ? { status: 'delivered' }
+              : { status: 'error', message: result as string },
           }));
         }
       } else {
+        const errMsg = data.error || 'Delivery failed';
+        console.error('Delivery error:', errMsg);
         for (const ct of targetsToDeliver) {
-          setDeliveryStatus(prev => ({ ...prev, [ct]: 'error' }));
+          setDeliveryStatus(prev => ({ ...prev, [ct]: { status: 'error', message: errMsg } }));
         }
       }
-    } catch {
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Network error';
+      console.error('Delivery fetch error:', errMsg);
       for (const ct of targetsToDeliver) {
-        setDeliveryStatus(prev => ({ ...prev, [ct]: 'error' }));
+        setDeliveryStatus(prev => ({ ...prev, [ct]: { status: 'error', message: errMsg } }));
       }
     }
 
-    // Auto-reset after 3s
-    setTimeout(() => setDeliveryStatus({}), 3000);
+    // Auto-clear only successful deliveries after 3s; errors persist until next attempt
+    if (hasSuccess) {
+      setTimeout(() => {
+        setDeliveryStatus(prev => {
+          const next = { ...prev };
+          for (const key of Object.keys(next)) {
+            if (next[key].status === 'delivered') delete next[key];
+          }
+          return next;
+        });
+      }, 3000);
+    }
   };
 
   return (
@@ -152,26 +171,31 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
                 {activeChannels.map(ch => {
                   const Icon = CHANNEL_ICONS[ch.channel_type] || Send;
                   const color = CHANNEL_COLORS[ch.channel_type] || 'text-slate-400';
-                  const status = deliveryStatus[ch.channel_type];
+                  const state = deliveryStatus[ch.channel_type];
+                  const st = state?.status;
                   return (
                     <button
                       key={ch.id}
                       onClick={() => { handleDeliver([ch.channel_type]); setShowDeliverMenu(false); }}
-                      disabled={status === 'delivering'}
+                      disabled={st === 'delivering'}
                       className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs hover:bg-white/5 transition-colors"
                     >
-                      {status === 'delivering' ? (
+                      {st === 'delivering' ? (
                         <Loader2 size={12} className="text-cyan-400 animate-spin" />
-                      ) : status === 'delivered' ? (
+                      ) : st === 'delivered' ? (
                         <CheckCircle2 size={12} className="text-emerald-400" />
-                      ) : status === 'error' ? (
+                      ) : st === 'error' ? (
                         <XCircle size={12} className="text-red-400" />
                       ) : (
                         <Icon size={12} className={color} />
                       )}
                       <span className="text-slate-300 capitalize">{ch.channel_type}</span>
-                      {status === 'delivered' && <span className="ml-auto text-[10px] text-emerald-400">Sent</span>}
-                      {status === 'error' && <span className="ml-auto text-[10px] text-red-400">Failed</span>}
+                      {st === 'delivered' && <span className="ml-auto text-[10px] text-emerald-400">Sent</span>}
+                      {st === 'error' && (
+                        <span className="ml-auto text-[10px] text-red-400 truncate max-w-[120px]" title={state.status === 'error' ? state.message : ''}>
+                          {state.status === 'error' && state.message ? state.message.slice(0, 30) : 'Failed'}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Compass, Plus, ChevronUp, ChevronDown, ChevronLeft, X,
   FolderKanban, ListChecks, Users, Radar, AlertTriangle, GraduationCap,
@@ -281,6 +281,9 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
   const [availableAnchors, setAvailableAnchors] = useState<{ id: string; label: string; entity_type: string }[]>([]);
 
   // Load data
+  // Tracks whether initial form state has been populated (to skip resetting save state on load)
+  const saveStateInitialized = useRef(false);
+
   const loadProfiles = useCallback(async () => {
     setLoading(true);
     const [profileData, historyData] = await Promise.all([
@@ -340,9 +343,35 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       setSelectedAnchorIds(new Set());
       setSelectedProfileId(null);
     }
+    setSectionSaveState({});
     setExpandedSection('basics');
     setView('editor');
+    // Mark initialized after a tick so the useEffect watchers don't fire on initial population
+    requestAnimationFrame(() => { saveStateInitialized.current = true; });
   };
+
+  // Reset initialization flag when leaving editor
+  useEffect(() => {
+    if (view !== 'editor') {
+      saveStateInitialized.current = false;
+    }
+  }, [view]);
+
+  // Change watchers — reset "Saved" → "Save Section" when user edits a section
+  useEffect(() => {
+    if (!saveStateInitialized.current) return;
+    setSectionSaveState(prev => prev.basics === 'saved' ? { ...prev, basics: 'idle' } : prev);
+  }, [formName, formDescription, formFrequency, formTime, formTimezone, formDayOfWeek, formDayOfMonth, formDensity, formScopeMode, selectedAnchorIds]);
+
+  useEffect(() => {
+    if (!saveStateInitialized.current) return;
+    setSectionSaveState(prev => prev.modules === 'saved' ? { ...prev, modules: 'idle' } : prev);
+  }, [editingProfile?.modules]);
+
+  useEffect(() => {
+    if (!saveStateInitialized.current) return;
+    setSectionSaveState(prev => prev.channels === 'saved' ? { ...prev, channels: 'idle' } : prev);
+  }, [editingProfile?.channels]);
 
   // Save profile
   const handleSave = async () => {
@@ -385,10 +414,9 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
     await loadProfiles();
   };
 
-  // Per-section save with confirmation animation
+  // Per-section save — stays 'saved' until user makes another change
   const markSectionSaved = (sectionId: string) => {
     setSectionSaveState(prev => ({ ...prev, [sectionId]: 'saved' }));
-    setTimeout(() => setSectionSaveState(prev => ({ ...prev, [sectionId]: 'idle' })), 2000);
   };
 
   const handleSaveBasics = async () => {

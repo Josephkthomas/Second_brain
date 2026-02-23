@@ -98,7 +98,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<{ s
         'Authorization': `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: 'Synapse <digest@synapse.app>',
+        from: process.env.RESEND_FROM_EMAIL || 'Synapse <onboarding@resend.dev>',
         to: [to],
         subject,
         html,

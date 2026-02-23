@@ -41,7 +41,7 @@ export const DIGEST_TEMPLATES: DigestTemplateDefinition[] = [
     iconName: 'FolderKanban',
     accentColor: 'cyan',
     category: 'strategic',
-    frequencies: ['daily', 'weekly'],
+    frequencies: ['daily'],
     systemPrompt: `You are a project status analyst. Given the user's knowledge graph data, identify all active projects, goals, and anchors. For each, synthesise:
 1. Recent activity — what nodes and edges were added or modified in the reporting period
 2. Current blockers or risks connected to this project
@@ -73,7 +73,7 @@ Output a ranked list of 5-10 priorities with a brief rationale for each ranking.
     iconName: 'Users',
     accentColor: 'violet',
     category: 'social',
-    frequencies: ['daily', 'weekly'],
+    frequencies: ['daily'],
     systemPrompt: `You are a relationship analyst. From the user's knowledge graph, identify all Person nodes and analyse:
 1. Who has been most active in recent ingestion (meetings, messages, documents)
 2. Who has pending action items or commitments involving them
@@ -83,29 +83,13 @@ Highlight follow-up opportunities and relationship risks. Be respectful and prof
     defaultTools: ['graph_query'],
   },
   {
-    template_id: 'attention_map',
-    name: 'Attention Map',
-    description: 'Visualises where your intellectual attention has been concentrated — which topics, domains, and projects are consuming your time.',
-    iconName: 'Radar',
-    accentColor: 'emerald',
-    category: 'analytical',
-    frequencies: ['weekly', 'monthly'],
-    systemPrompt: `You are an attention analyst. From the user's knowledge graph, analyse the distribution of recently ingested content across topics, entity types, and projects. Identify:
-1. Top 5 topics by volume of new nodes/edges
-2. Topics that are growing vs. declining in activity
-3. Any significant imbalances — e.g., one project consuming 80% of attention while others are neglected
-4. New topics that appeared for the first time in this period
-Present this as a concise attention distribution summary. Use percentages where helpful.`,
-    defaultTools: ['graph_query'],
-  },
-  {
     template_id: 'signals_alerts',
     name: 'Signals & Alerts',
     description: 'Surfaces anomalies, stale items, and noteworthy patterns that need your attention.',
     iconName: 'AlertTriangle',
     accentColor: 'red',
     category: 'operational',
-    frequencies: ['daily', 'weekly'],
+    frequencies: ['daily'],
     systemPrompt: `You are an anomaly detector. From the user's knowledge graph, identify:
 1. Stale commitments — Action nodes older than 7 days with no follow-up edges
 2. Orphaned nodes — recently created entities with very few connections (may need enrichment)
@@ -114,22 +98,6 @@ Present this as a concise attention distribution summary. Use percentages where 
 5. Contradictions or conflicts — edges of type 'contradicts' that appeared recently
 Prioritise by potential impact. Be specific about what triggered each alert.`,
     defaultTools: ['graph_query'],
-  },
-  {
-    template_id: 'learning_gaps',
-    name: 'Learning & Knowledge Gaps',
-    description: 'Identifies areas where your knowledge graph has gaps relative to your active projects and goals, and suggests learning opportunities.',
-    iconName: 'GraduationCap',
-    accentColor: 'blue',
-    category: 'analytical',
-    frequencies: ['weekly', 'monthly'],
-    systemPrompt: `You are a learning analyst. From the user's knowledge graph, identify:
-1. Topics referenced in active projects that have very few supporting nodes (shallow knowledge areas)
-2. Questions or Hypothesis nodes that remain unresolved
-3. Concepts that appear frequently but lack detailed supporting evidence or sources
-4. Skills or technologies mentioned in goals but with minimal related learning content
-For each gap, suggest what kind of content or research would fill it. Be constructive and specific.`,
-    defaultTools: ['graph_query', 'web_search'],
   },
 
   // ─── Weekly Templates ──────────────────────────────────────
@@ -157,12 +125,13 @@ Present this as a concise progress narrative, not a list. Help the user feel a s
     accentColor: 'violet',
     category: 'analysis',
     frequencies: ['weekly'],
-    systemPrompt: `You are a pattern analyst. From the user's knowledge graph, examine all content ingested in the past 7 days across all source types (meetings, articles, videos, notes) and identify:
-1. Recurring themes — topics or concepts that appeared in 3+ different sources this week
-2. Converging ideas — separate threads of knowledge that are starting to connect
-3. Contradictions — instances where different sources present conflicting perspectives on the same topic
-4. New vocabulary — terms, frameworks, or concepts that appeared for the first time this week
-Focus on cross-source patterns that the user is unlikely to notice on their own. This is about surfacing the signal in the noise.`,
+    systemPrompt: `You are a pattern and attention analyst. From the user's knowledge graph, examine all content ingested in the past 7 days across all source types (meetings, articles, videos, notes) and identify:
+1. Attention distribution — top 5 topics by volume of new nodes/edges, and which are growing vs. declining in activity
+2. Recurring themes — topics or concepts that appeared in 3+ different sources this week
+3. Converging ideas — separate threads of knowledge that are starting to connect
+4. Contradictions — instances where different sources present conflicting perspectives on the same topic
+5. New vocabulary — terms, frameworks, or concepts that appeared for the first time this week
+Focus on cross-source patterns that the user is unlikely to notice on their own. Surface where attention is concentrated and whether that aligns with stated priorities.`,
     defaultTools: ['graph_query'],
   },
   {
@@ -211,9 +180,10 @@ Format as a structured log that serves as a single source of truth for what was 
 1. Growth metrics — total new nodes, new edges, new source documents ingested
 2. Domain distribution — which entity types grew most (Topics vs. People vs. Actions, etc.)
 3. Graph density changes — are new nodes connecting to existing clusters or forming new isolated clusters
-4. Strongest new connections — the highest-value edges added this week (by number of supporting sources or semantic weight)
-5. Week-over-week comparison — is the graph growing faster or slower than the previous week, and in which areas
-Present this as a brief quantitative report with 2-3 qualitative insights.`,
+4. Knowledge gaps — topics referenced in active projects with few supporting nodes, and unresolved Question or Hypothesis nodes
+5. Strongest new connections — the highest-value edges added this week (by number of supporting sources or semantic weight)
+6. Week-over-week comparison — is the graph growing faster or slower than the previous week, and in which areas
+Present this as a brief quantitative report with 2-3 qualitative insights. For each knowledge gap, suggest what kind of content would fill it.`,
     defaultTools: ['graph_query'],
   },
   {
@@ -294,12 +264,14 @@ Help the user see their network as a strategic asset and identify where to inves
     accentColor: 'blue',
     category: 'analysis',
     frequencies: ['monthly'],
-    systemPrompt: `You are a knowledge portfolio analyst. From the user's knowledge graph, create a comprehensive view of how knowledge is distributed:
+    systemPrompt: `You are a knowledge portfolio analyst. From the user's knowledge graph, create a comprehensive view of how knowledge is distributed and where gaps exist:
 1. Topic allocation — percentage breakdown of nodes by major topic clusters. What percentage of your knowledge is in each domain?
-2. Concentration risk — are you over-indexed on one topic or project? Identify areas of dangerous concentration
-3. Breadth vs. depth — for each major topic, characterise whether knowledge is broad (many loosely connected nodes) or deep (dense, heavily interconnected subgraph)
-4. Stale vs. fresh — which knowledge areas haven't been updated in 30+ days vs. which are actively growing
-5. Cross-pollination index — which topics have connections to other topics, and which are isolated silos
+2. Attention balance — is actual effort aligned with stated priorities? Highlight imbalances between where time was spent vs. where goals point
+3. Concentration risk — are you over-indexed on one topic or project? Identify areas of dangerous concentration
+4. Knowledge gaps — topics referenced in active projects that lack supporting nodes, and unresolved Questions or Hypotheses. Suggest what learning or research would fill each gap
+5. Breadth vs. depth — for each major topic, characterise whether knowledge is broad (many loosely connected nodes) or deep (dense, heavily interconnected subgraph)
+6. Stale vs. fresh — which knowledge areas haven't been updated in 30+ days vs. which are actively growing
+7. Cross-pollination index — which topics have connections to other topics, and which are isolated silos
 Present this as an intellectual portfolio report with clear allocation percentages and rebalancing recommendations.`,
     defaultTools: ['graph_query'],
   },

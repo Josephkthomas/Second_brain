@@ -8,6 +8,7 @@ import { getDigestTemplate, type DigestTemplateDefinition } from '../config/dige
 import type {
   DigestProfile, DigestModule, DigestOutput, DigestModuleOutput,
   DigestSection, DigestAction, DigestHistoryEntry, ScheduleFrequency,
+  DigestScope,
 } from '../types/digest';
 
 const initGenAI = () => {
@@ -59,11 +60,16 @@ export function getTimeRange(frequency: ScheduleFrequency): { from: string; to: 
 async function gatherGraphContext(
   userId: string,
   timeRange: { from: string; to: string },
+  scope?: DigestScope,
   entityTypeFilter?: string[]
 ): Promise<{ nodes: any[]; edges: any[]; anchors: any[] }> {
   const client = getSupabase();
 
-  const anchors = await fetchAnchors();
+  const allAnchors = await fetchAnchors();
+  // Filter anchors by scope — only pass selected anchors to sub-agents
+  const anchors = (scope?.mode === 'selected' && (scope as { mode: 'selected'; anchor_ids: string[] }).anchor_ids?.length > 0)
+    ? allAnchors.filter(a => (scope as { mode: 'selected'; anchor_ids: string[] }).anchor_ids.includes(a.id))
+    : allAnchors;
 
   let nodesQuery = client
     .from('knowledge_nodes')
@@ -107,7 +113,8 @@ async function executeSubAgent(
   graphContext: { nodes: any[]; edges: any[]; anchors: any[] },
   frequency: ScheduleFrequency,
   density: string,
-  timeRange: { from: string; to: string }
+  timeRange: { from: string; to: string },
+  scope?: DigestScope
 ): Promise<DigestModuleOutput> {
   const ai = initGenAI();
 
@@ -131,13 +138,17 @@ async function executeSubAgent(
     `- [Anchor] ${a.label} (${a.entity_type})${a.description ? `: ${a.description.slice(0, 80)}` : ''}`
   ).join('\n');
 
+  const scopeNote = scope?.mode === 'selected'
+    ? `\n=== SCOPE ===\nThis digest focuses on selected anchors only. Only the anchors listed below are in scope for this analysis. Do NOT flag unlisted anchors as neglected, missing, or requiring attention — they are intentionally excluded from this digest.\n`
+    : '';
+
   const prompt = `${systemPrompt}
 
 === CONTEXT ===
 Reporting period: ${timeRange.from.slice(0, 10)} to ${timeRange.to.slice(0, 10)}
 Frequency: ${frequency}
 Density level: ${density}
-
+${scopeNote}
 === ANCHORS (Priority Projects/Goals) ===
 ${anchorSummary || '(No anchors configured)'}
 
@@ -213,7 +224,8 @@ async function runMetaAgent(
   moduleOutputs: DigestModuleOutput[],
   frequency: ScheduleFrequency,
   density: string,
-  recentHistory: DigestHistoryEntry[]
+  recentHistory: DigestHistoryEntry[],
+  scope?: DigestScope
 ): Promise<{ executive_summary: string; suggested_next_steps: DigestAction[] }> {
   const ai = initGenAI();
 
@@ -225,8 +237,12 @@ async function runMetaAgent(
     `[${h.delivered_at?.slice(0, 10)}] ${h.content?.executive_summary || 'No summary'}`
   ).join('\n');
 
-  const prompt = `You synthesise intelligence module outputs into a coherent briefing.
+  const scopeInstruction = scope?.mode === 'selected'
+    ? `\nScope: This digest is focused on selected anchors only. Do not reference, flag, or recommend action for anchors that are not part of the selected scope. Only analyse what is in scope.\n`
+    : '';
 
+  const prompt = `You synthesise intelligence module outputs into a coherent briefing.
+${scopeInstruction}
 === MODULE OUTPUTS ===
 ${modulesSummary}
 
@@ -371,7 +387,7 @@ export async function generateDigest(
 
   try {
     const timeRange = getTimeRange(profile.frequency);
-    const graphContext = await gatherGraphContext(userId, timeRange);
+    const graphContext = await gatherGraphContext(userId, timeRange, profile.scope);
 
     const graphStats = {
       nodes: graphContext.nodes.length,
@@ -406,7 +422,7 @@ export async function generateDigest(
 
       const output = await executeSubAgent(
         mod, template, graphContext,
-        profile.frequency, profile.density, timeRange
+        profile.frequency, profile.density, timeRange, profile.scope
       );
       moduleOutputs.push(output);
 
@@ -434,7 +450,7 @@ export async function generateDigest(
 
     const recentHistory = await fetchDigestHistory(undefined, 5);
     const { executive_summary, suggested_next_steps } = await runMetaAgent(
-      moduleOutputs, profile.frequency, profile.density, recentHistory
+      moduleOutputs, profile.frequency, profile.density, recentHistory, profile.scope
     );
 
     if (metaIdx >= 0) {
