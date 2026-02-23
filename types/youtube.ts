@@ -78,10 +78,15 @@ export interface YouTubeQueueItem {
   error_message: string | null;
   retry_count: number;
   max_retries: number;
+  // Live processing status
+  processing_step: string | null;
   // Timestamps
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Joined fields (present when fetched with select join)
+  youtube_channels?: { channel_name: string } | null;
+  youtube_playlists?: { playlist_name: string } | null;
 }
 
 /**

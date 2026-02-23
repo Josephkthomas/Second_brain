@@ -1,9 +1,9 @@
 // QueueStatusPanel - Display YouTube video processing queue
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clock, CheckCircle, XCircle, Loader2, RotateCcw,
-  Trash2, ExternalLink, AlertCircle, Filter, Play
+  Trash2, ExternalLink, AlertCircle, Filter, Play, Youtube, ListVideo
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -35,6 +35,30 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ processed: number; remaining: number } | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Auto-poll when items are actively processing
+  const hasActiveItems = items.some(
+    i => i.status === 'fetching_transcript' || i.status === 'extracting'
+  );
+
+  useEffect(() => {
+    if (hasActiveItems && !pollingRef.current) {
+      pollingRef.current = setInterval(() => {
+        onRefresh();
+      }, 2500);
+    } else if (!hasActiveItems && pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [hasActiveItems, onRefresh]);
 
   // Filter items
   const filteredItems = items.filter(item => {
@@ -216,6 +240,38 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
     });
   };
 
+  // Build progress steps for actively processing items
+  function getProgressSteps(item: YouTubeQueueItem): Array<{ label: string; detail: string; status: 'active' | 'done' | 'pending' }> {
+    const step = item.processing_step || '';
+
+    if (item.status === 'fetching_transcript') {
+      return [
+        { label: 'Fetching Transcript', detail: step || 'Connecting to YouTube...', status: 'active' },
+        { label: 'Extracting Knowledge', detail: 'Waiting...', status: 'pending' },
+        { label: 'Cross-Referencing Graph', detail: 'Waiting...', status: 'pending' },
+      ];
+    }
+
+    if (item.status === 'extracting') {
+      const isCrossRef = step.toLowerCase().includes('cross-referenc');
+      return [
+        { label: 'Fetching Transcript', detail: 'Done', status: 'done' },
+        {
+          label: 'Extracting Knowledge',
+          detail: isCrossRef ? 'Done' : (step || 'Running AI extraction...'),
+          status: isCrossRef ? 'done' : 'active',
+        },
+        {
+          label: 'Cross-Referencing Graph',
+          detail: isCrossRef ? step : 'Waiting...',
+          status: isCrossRef ? 'active' : 'pending',
+        },
+      ];
+    }
+
+    return [];
+  }
+
   // Empty state
   if (items.length === 0) {
     return (
@@ -333,18 +389,66 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
                       </a>
                     </div>
 
-                    {/* Status */}
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={clsx('flex items-center gap-1 text-xs font-medium', config.color)}>
-                        <StatusIcon className={clsx('w-3 h-3', isProcessing && 'animate-spin')} />
-                        {config.label}
-                      </span>
+                    {/* Source tag + status */}
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      {/* Source tag */}
+                      {item.youtube_playlists?.playlist_name ? (
+                        <span className="flex items-center gap-1 text-xs text-purple-400">
+                          <ListVideo className="w-3 h-3" />
+                          {item.youtube_playlists.playlist_name}
+                        </span>
+                      ) : item.youtube_channels?.channel_name ? (
+                        <span className="flex items-center gap-1 text-xs text-slate-400">
+                          <Youtube className="w-3 h-3" />
+                          {item.youtube_channels.channel_name}
+                        </span>
+                      ) : null}
+
+                      {/* Status badge */}
+                      {!isProcessing && (
+                        <span className={clsx('flex items-center gap-1 text-xs font-medium', config.color)}>
+                          <StatusIcon className="w-3 h-3" />
+                          {config.label}
+                        </span>
+                      )}
                       {item.published_at && (
                         <span className="text-xs text-slate-500">
                           Published: {formatDate(item.published_at)}
                         </span>
                       )}
                     </div>
+
+                    {/* Live progress steps for active items */}
+                    {isProcessing && (
+                      <div className="space-y-1.5 mb-2">
+                        {getProgressSteps(item).map(step => (
+                          <div key={step.label} className="flex items-start gap-2">
+                            <div className="mt-0.5 flex-shrink-0">
+                              {step.status === 'done' ? (
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : step.status === 'active' ? (
+                                <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                              ) : (
+                                <div className="w-3.5 h-3.5 rounded-full border border-slate-600" />
+                              )}
+                            </div>
+                            <div>
+                              <div className={clsx(
+                                'text-xs font-medium',
+                                step.status === 'done' ? 'text-emerald-300' :
+                                step.status === 'active' ? 'text-cyan-300' :
+                                'text-slate-500'
+                              )}>
+                                {step.label}
+                              </div>
+                              {step.detail && (
+                                <div className="text-[10px] text-slate-500">{step.detail}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Error Message */}
                     {item.status === 'failed' && item.error_message && (

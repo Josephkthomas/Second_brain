@@ -1,11 +1,8 @@
-// AddPlaylistModal - Setup wizard for connecting a YouTube playlist
-// Step 1: Generate Synapse code
-// Step 2: User creates playlist on YouTube with the code name
-// Step 3: Paste playlist URL
-// Step 4: Verify & configure extraction settings
+// AddPlaylistModal - Connect an existing YouTube playlist for auto-ingestion
+// Simple single-form: paste URL, configure settings, submit
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, ListVideo, Loader2, AlertCircle, CheckCircle, Link, Tag, Settings2, Copy, Check, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, ListVideo, Loader2, AlertCircle, CheckCircle, Link, Tag, Settings2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { fetchAnchors } from '../../services/supabase';
@@ -29,22 +26,8 @@ const ANCHOR_EMPHASIS_OPTIONS: Array<{ id: AnchorEmphasis; name: string; descrip
   { id: 'passive', name: 'Passive', description: 'Minimal anchor influence' },
 ];
 
-// Generate code on component mount (not per render)
-function generatePlaylistCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 4; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return `SYN-${code}`;
-}
-
 export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModalProps) {
   const { session } = useAuth();
-
-  // Generate code once on mount
-  const synapseCode = useMemo(() => generatePlaylistCode(), []);
-  const playlistName = `SYNAPSE-${synapseCode}`;
 
   // Form state
   const [playlistUrl, setPlaylistUrl] = useState('');
@@ -59,8 +42,6 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [anchors, setAnchors] = useState<Array<{ id: string; label: string; entity_type: string }>>([]);
-  const [codeCopied, setCodeCopied] = useState(false);
-  const [nameCopied, setNameCopied] = useState(false);
 
   // Fetch anchors on mount
   useEffect(() => {
@@ -74,18 +55,6 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
     }
     loadAnchors();
   }, []);
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(synapseCode);
-    setCodeCopied(true);
-    setTimeout(() => setCodeCopied(false), 2000);
-  };
-
-  const handleCopyName = () => {
-    navigator.clipboard.writeText(playlistName);
-    setNameCopied(true);
-    setTimeout(() => setNameCopied(false), 2000);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,7 +113,7 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">Connect YouTube Playlist</h3>
-              <p className="text-sm text-slate-400">Auto-ingest videos from a YouTube playlist</p>
+              <p className="text-sm text-slate-400">Auto-ingest videos from an existing YouTube playlist</p>
             </div>
           </div>
           <button
@@ -158,43 +127,11 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
         {/* Content */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
 
-          {/* Step 1: Synapse Code */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="text-sm font-medium text-slate-300 mb-1">Step 1: Your Synapse Code</div>
-            <p className="text-xs text-slate-500 mb-3">
-              Create a new playlist on YouTube and name it with this code
-            </p>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-3">
-                <span className="text-lg font-mono font-bold text-white tracking-wider">{playlistName}</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleCopyName}
-                className="px-3 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors flex items-center gap-2"
-              >
-                {nameCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                <span className="text-xs">{nameCopied ? 'Copied!' : 'Copy'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Step 2: Instructions */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="text-sm font-medium text-slate-300 mb-2">Step 2: Create Playlist on YouTube</div>
-            <ol className="text-xs text-slate-400 space-y-1.5 list-decimal list-inside">
-              <li>Go to <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 inline-flex items-center gap-1">YouTube <ExternalLink className="w-3 h-3" /></a> and create a new playlist</li>
-              <li>Name it exactly: <span className="text-white font-mono font-medium">{playlistName}</span></li>
-              <li>Set the playlist to <span className="text-amber-400 font-medium">Public</span> or <span className="text-amber-400 font-medium">Unlisted</span></li>
-              <li>Add any videos you want to ingest</li>
-            </ol>
-          </div>
-
-          {/* Step 3: Paste URL */}
+          {/* Playlist URL */}
           <div>
             <label className="block text-sm font-medium text-white mb-2">
               <Link className="w-4 h-4 inline mr-2" />
-              Step 3: Paste Your Playlist URL
+              Playlist URL
             </label>
             <input
               type="text"
@@ -203,9 +140,10 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
               placeholder="https://www.youtube.com/playlist?list=PLxxxxxxx"
               className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:border-red-500 focus:outline-none"
               required
+              autoFocus
             />
             <p className="text-xs text-slate-500 mt-2">
-              Copy the full URL from your browser when viewing the playlist
+              Paste the URL of any public or unlisted YouTube playlist
             </p>
           </div>
 
@@ -375,7 +313,7 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
             ) : (
               <>
                 <CheckCircle className="w-4 h-4" />
-                Verify & Connect
+                Connect Playlist
               </>
             )}
           </button>

@@ -4,11 +4,11 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { fetchPlaylistItems, getUserYouTubeApiKey } from './_utils/playlist-helpers';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const CRON_SECRET = process.env.CRON_SECRET;
-const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -56,9 +56,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     for (const playlist of playlists) {
       try {
-        // Get YouTube API key
-        const youtubeApiKey = process.env.YOUTUBE_API_KEY ||
-          (await getUserYouTubeApiKey(supabase, playlist.user_id));
+        // Get YouTube API key (shared helper checks env + user settings)
+        const youtubeApiKey = await getUserYouTubeApiKey(supabase, playlist.user_id);
 
         if (!youtubeApiKey) {
           console.warn(`[Poll-Playlist] No API key for user ${playlist.user_id}`);
@@ -154,88 +153,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// ── YouTube Data API Helpers ──────────────────────
-
-interface PlaylistVideo {
-  videoId: string;
-  title: string;
-  thumbnailUrl: string;
-  publishedAt: string;
-  channelTitle: string;
-  position: number;
-}
-
-async function fetchPlaylistItems(
-  playlistId: string,
-  apiKey: string
-): Promise<PlaylistVideo[]> {
-  const videos: PlaylistVideo[] = [];
-  let nextPageToken: string | null = null;
-
-  do {
-    const params = new URLSearchParams({
-      part: 'snippet,contentDetails',
-      playlistId,
-      maxResults: '50',
-      key: apiKey,
-    });
-
-    if (nextPageToken) {
-      params.set('pageToken', nextPageToken);
-    }
-
-    const response = await fetch(
-      `${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`
-    );
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`YouTube API error ${response.status}: ${errorBody}`);
-    }
-
-    const data = await response.json();
-
-    for (const item of data.items || []) {
-      const videoId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
-      if (!videoId) continue;
-
-      // Skip deleted/private videos
-      const title = item.snippet?.title || '';
-      if (title === 'Deleted video' || title === 'Private video') continue;
-
-      videos.push({
-        videoId,
-        title: title || 'Untitled',
-        thumbnailUrl:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        publishedAt: item.contentDetails?.videoPublishedAt ||
-          item.snippet?.publishedAt ||
-          new Date().toISOString(),
-        channelTitle: item.snippet?.videoOwnerChannelTitle || '',
-        position: item.snippet?.position || 0,
-      });
-    }
-
-    nextPageToken = data.nextPageToken || null;
-  } while (nextPageToken);
-
-  return videos;
-}
-
-async function getUserYouTubeApiKey(
-  supabase: any,
-  userId: string
-): Promise<string | null> {
-  try {
-    const { data } = await supabase
-      .from('youtube_settings')
-      .select('youtube_api_key')
-      .eq('user_id', userId)
-      .single();
-    return data?.youtube_api_key || null;
-  } catch {
-    return null;
-  }
-}

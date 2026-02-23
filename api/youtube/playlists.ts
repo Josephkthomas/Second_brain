@@ -6,6 +6,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { fetchPlaylistItems } from './_utils/playlist-helpers';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -350,70 +351,3 @@ async function queuePlaylistVideos(
   console.log(`[playlists] Queued ${newVideos.length} videos from playlist "${playlist.playlist_name}"`);
 }
 
-// ── YouTube Data API helpers ─────────────────
-
-interface PlaylistVideo {
-  videoId: string;
-  title: string;
-  thumbnailUrl: string;
-  publishedAt: string;
-  channelTitle: string;
-  position: number;
-}
-
-async function fetchPlaylistItems(
-  playlistId: string,
-  apiKey: string
-): Promise<PlaylistVideo[]> {
-  const videos: PlaylistVideo[] = [];
-  let nextPageToken: string | null = null;
-
-  do {
-    const params = new URLSearchParams({
-      part: 'snippet,contentDetails',
-      playlistId,
-      maxResults: '50',
-      key: apiKey,
-    });
-
-    if (nextPageToken) {
-      params.set('pageToken', nextPageToken);
-    }
-
-    const response = await fetch(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`YouTube API error ${response.status}: ${errorBody}`);
-    }
-
-    const data = await response.json();
-
-    for (const item of data.items || []) {
-      const videoId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
-      if (!videoId) continue;
-
-      // Skip deleted/private videos
-      const title = item.snippet?.title || '';
-      if (title === 'Deleted video' || title === 'Private video') continue;
-
-      videos.push({
-        videoId,
-        title: title || 'Untitled',
-        thumbnailUrl:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        publishedAt: item.contentDetails?.videoPublishedAt ||
-          item.snippet?.publishedAt ||
-          new Date().toISOString(),
-        channelTitle: item.snippet?.videoOwnerChannelTitle || '',
-        position: item.snippet?.position || 0,
-      });
-    }
-
-    nextPageToken = data.nextPageToken || null;
-  } while (nextPageToken);
-
-  return videos;
-}

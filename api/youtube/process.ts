@@ -504,7 +504,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Mark as processing
         await supabase
           .from('youtube_ingestion_queue')
-          .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
+          .update({
+            status: 'fetching_transcript',
+            processing_step: 'Fetching transcript...',
+            started_at: new Date().toISOString(),
+          })
           .eq('id', item.id);
 
         // Fetch transcript using tiered extraction (free methods first, Apify as fallback)
@@ -518,10 +522,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log(`[Process] Transcript fetched via ${transcriptResult.method} (${transcriptResult.transcript.length} chars in ${transcriptResult.duration_ms}ms)`);
 
         // Update status to extracting
+        const transcriptLen = (transcriptResult.transcript.length / 1000).toFixed(1);
         await supabase
           .from('youtube_ingestion_queue')
           .update({
             status: 'extracting',
+            processing_step: `Transcript fetched (${transcriptLen}k chars). Extracting knowledge...`,
             transcript: transcriptResult.transcript.substring(0, 50000), // Store truncated
             transcript_language: transcriptResult.language,
             transcript_fetched_at: new Date().toISOString(),
@@ -561,6 +567,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         );
 
         console.log(`[Process] Extracted ${extracted.nodes.length} nodes, ${extracted.edges.length} internal edges`);
+
+        // Update processing step
+        await supabase
+          .from('youtube_ingestion_queue')
+          .update({
+            processing_step: `Extracted ${extracted.nodes.length} nodes, ${extracted.edges.length} edges. Saving to graph...`,
+          })
+          .eq('id', item.id);
 
         // Save knowledge source
         const { data: source, error: sourceError } = await supabase
@@ -688,6 +702,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (nodesCreated > 0) {
           console.log('[Process] Starting cross-reference with existing knowledge...');
 
+          await supabase
+            .from('youtube_ingestion_queue')
+            .update({
+              processing_step: `Cross-referencing ${nodesCreated} nodes with existing knowledge graph...`,
+            })
+            .eq('id', item.id);
+
           // Fetch existing nodes for cross-referencing (recent, non-source nodes)
           const { data: existingNodes } = await supabase
             .from('knowledge_nodes')
@@ -773,6 +794,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from('youtube_ingestion_queue')
           .update({
             status: 'completed',
+            processing_step: `Completed: ${nodesCreated} nodes, ${edgesCreated} edges created.`,
             source_id: source?.id || null,
             nodes_created: nodesCreated,
             edges_created: edgesCreated,
@@ -835,6 +857,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from('youtube_ingestion_queue')
           .update({
             status: 'failed',
+            processing_step: null,
             error_message: errorMessage,
             completed_at: new Date().toISOString(),
           })

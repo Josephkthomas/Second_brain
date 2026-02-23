@@ -1,10 +1,11 @@
 // PlaylistList - Display list of connected YouTube playlists
 
 import React, { useState } from 'react';
-import { Search, Plus, ListVideo, ExternalLink, Trash2, Settings2, CheckCircle, AlertCircle, Loader2, Pause, Play } from 'lucide-react';
+import { Search, Plus, ListVideo, ExternalLink, Trash2, CheckCircle, AlertCircle, Loader2, Pause, Play, Eye } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import type { YouTubePlaylist } from '../../types/youtube';
+import PlaylistVideoBrowser from './PlaylistVideoBrowser';
 
 interface PlaylistListProps {
   playlists: YouTubePlaylist[];
@@ -18,6 +19,7 @@ export default function PlaylistList({ playlists, onRefresh, onAddPlaylist }: Pl
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'paused'>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [browserPlaylistId, setBrowserPlaylistId] = useState<string | null>(null);
 
   // Filter playlists
   const filteredPlaylists = playlists.filter(playlist => {
@@ -164,6 +166,7 @@ export default function PlaylistList({ playlists, onRefresh, onAddPlaylist }: Pl
                 key={playlist.id}
                 className={clsx(
                   'bg-slate-900 border rounded-lg p-4 transition-all hover:border-slate-600',
+                  browserPlaylistId === playlist.id && 'ring-1 ring-cyan-500/30',
                   playlist.connection_status === 'error'
                     ? 'border-red-500/40'
                     : playlist.is_active
@@ -252,6 +255,21 @@ export default function PlaylistList({ playlists, onRefresh, onAddPlaylist }: Pl
                     )}
                   </button>
 
+                  <button
+                    onClick={() => setBrowserPlaylistId(
+                      browserPlaylistId === playlist.id ? null : playlist.id
+                    )}
+                    className={clsx(
+                      'p-1.5 rounded transition-colors',
+                      browserPlaylistId === playlist.id
+                        ? 'text-cyan-400 bg-cyan-500/10'
+                        : 'text-slate-500 hover:text-cyan-400 hover:bg-cyan-500/10'
+                    )}
+                    title="Browse and queue videos"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                  </button>
+
                   <div className="flex-1" />
 
                   <button
@@ -271,6 +289,19 @@ export default function PlaylistList({ playlists, onRefresh, onAddPlaylist }: Pl
             ))}
           </div>
         )}
+
+        {/* Video Browser Panel */}
+        {browserPlaylistId && (() => {
+          const browsePlaylist = playlists.find(p => p.id === browserPlaylistId);
+          if (!browsePlaylist) return null;
+          return (
+            <PlaylistVideoBrowser
+              playlist={browsePlaylist}
+              onClose={() => setBrowserPlaylistId(null)}
+              onQueueChange={onRefresh}
+            />
+          );
+        })()}
       </div>
     </div>
   );
