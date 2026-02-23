@@ -195,15 +195,20 @@ export default function QueueHub({ onGraphUpdate }: QueueHubProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
+      {/* Center-aligned Header */}
+      <div className="mb-6 text-center">
+        <h1 className="text-3xl font-bold text-white mb-2 flex items-center justify-center gap-3">
+          <ListTodo className="text-amber-400" />
+          Processing Queue
+        </h1>
+        <p className="text-slate-400 text-sm max-w-lg mx-auto">
+          Track the status of videos being processed into your knowledge graph.
+        </p>
+      </div>
+
+      {/* Actions Bar */}
       <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <ListTodo className="w-6 h-6 text-cyan-400" />
-          <div>
-            <h2 className="text-xl font-bold text-white">Processing Queue</h2>
-            <p className="text-xs text-slate-400">{items.length} total items</p>
-          </div>
-        </div>
+        <p className="text-xs text-slate-400">{items.length} total items</p>
         <div className="flex items-center gap-2">
           <button
             onClick={handleRefresh}
@@ -216,7 +221,7 @@ export default function QueueHub({ onGraphUpdate }: QueueHubProps) {
             <button
               onClick={handleProcessNow}
               disabled={isProcessing}
-              className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
             >
               {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               {isProcessing ? 'Processing...' : `Process Now (${counts.pending})`}

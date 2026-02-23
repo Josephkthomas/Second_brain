@@ -12,9 +12,7 @@ import { GraphView } from './components/GraphView';
 import { InjectionHub } from './components/InjectionHub';
 import { ChatInterface } from './components/ChatInterface';
 import { SourcesSidebar } from './components/SourcesSidebar';
-import { UserProfileSettings } from './components/UserProfileSettings';
-import { AnchorManager } from './components/AnchorManager';
-import { ExtractionSettings } from './components/ExtractionSettings';
+import { SettingsPanel } from './components/SettingsPanel';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
 import { LENS_CONFIG } from './constants';
@@ -23,7 +21,7 @@ import { HistoryPanel } from './components/HistoryPanel';
 import QueueHub from './components/QueueHub';
 import {
   RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow, ListTodo
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Workflow, ListTodo
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -44,9 +42,7 @@ const MainApp: React.FC = () => {
   const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
   const [showDataVault, setShowDataVault] = useState(false);
   const [showInjectionHub, setShowInjectionHub] = useState(false);
-  const [showProfileSettings, setShowProfileSettings] = useState(false);
-  const [showAnchorManager, setShowAnchorManager] = useState(false);
-  const [showExtractionSettings, setShowExtractionSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showAutomatePanel, setShowAutomatePanel] = useState(false);
   const [showQueuePanel, setShowQueuePanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
@@ -344,9 +340,21 @@ const MainApp: React.FC = () => {
                  </div>
             )}
             
-            {/* Primary Actions */}
+            {/* Primary Actions — Order: Inject → Sources → Automate → Queue */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
-               <button
+
+              {/* Inject — Cyan (Primary CTA) */}
+              <button
+                onClick={() => setShowInjectionHub(true)}
+                className="flex items-center gap-2 bg-cyber-cyan hover:bg-cyan-400 text-black px-4 py-2 rounded-md text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105"
+                title="Quick Inject [Key: I]"
+              >
+                 <Plus size={16} strokeWidth={3} />
+                 <span className="hidden sm:inline">Inject</span>
+              </button>
+
+              {/* Sources — Indigo */}
+              <button
                 onClick={() => setShowSourceExplorer(prev => !prev)}
                 className={clsx(
                   "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
@@ -359,22 +367,14 @@ const MainApp: React.FC = () => {
                 <BookOpen size={16} />
                 <span className="hidden sm:inline">Sources</span>
               </button>
-              
-              <button
-                onClick={() => setShowInjectionHub(true)}
-                className="flex items-center gap-2 bg-cyber-cyan hover:bg-cyan-400 text-black px-4 py-2 rounded-md text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105"
-                title="Quick Inject [Key: I]"
-              >
-                 <Plus size={16} strokeWidth={3} />
-                 <span className="hidden sm:inline">Inject</span>
-              </button>
 
+              {/* Automate — Purple */}
               <button
                 onClick={() => setShowAutomatePanel(true)}
                 className={clsx(
                   "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
                   showAutomatePanel
-                    ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50"
+                    ? "bg-purple-500/20 text-purple-400 border-purple-500/50"
                     : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
                 )}
                 title="Automated Pipelines"
@@ -383,6 +383,7 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Automate</span>
               </button>
 
+              {/* Queue — Amber */}
               <button
                 onClick={() => setShowQueuePanel(true)}
                 className={clsx(
@@ -401,32 +402,13 @@ const MainApp: React.FC = () => {
 
             {/* User & Sign Out */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
-               <div className="flex items-center gap-2 px-2">
-                  <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">
-                    {user?.email?.charAt(0).toUpperCase() || 'U'}
-                  </div>
-                  <span className="text-xs text-slate-400 max-w-[120px] truncate hidden sm:block" title={user?.email || ''}>
-                    {user?.email}
-                  </span>
+               <div className="w-8 h-8 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center text-xs font-bold">
+                 {user?.email?.charAt(0).toUpperCase() || 'U'}
                </div>
                <button
-                 onClick={() => setShowAnchorManager(true)}
-                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-amber-400 transition-colors"
-                 title="Anchor Manager"
-               >
-                  <Anchor size={16} />
-               </button>
-               <button
-                 onClick={() => setShowExtractionSettings(true)}
+                 onClick={() => setShowSettings(true)}
                  className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyan-400 transition-colors"
-                 title="Extraction Settings"
-               >
-                  <Zap size={16} />
-               </button>
-               <button
-                 onClick={() => setShowProfileSettings(true)}
-                 className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-cyber-cyan transition-colors"
-                 title="Profile Settings"
+                 title="Settings"
                >
                   <Settings size={16} />
                </button>
@@ -548,8 +530,10 @@ const MainApp: React.FC = () => {
                 <X size={24} />
               </button>
            </div>
-           <div className="h-full pt-20 pb-6 px-6">
-              <QueueHub onGraphUpdate={handleGraphUpdate} />
+           <div className="h-full pt-20 pb-6 px-6 overflow-y-auto">
+              <div className="max-w-4xl mx-auto w-full h-full">
+                <QueueHub onGraphUpdate={handleGraphUpdate} />
+              </div>
            </div>
         </div>
       )}
@@ -590,23 +574,11 @@ const MainApp: React.FC = () => {
         onNodeSelect={handleChatNodeSelect}
       />
 
-      {/* 8. USER PROFILE SETTINGS */}
-      <UserProfileSettings
-        isOpen={showProfileSettings}
-        onClose={() => setShowProfileSettings(false)}
-      />
-
-      {/* 9. ANCHOR MANAGER */}
-      <AnchorManager
-        isOpen={showAnchorManager}
-        onClose={() => setShowAnchorManager(false)}
+      {/* 8. UNIFIED SETTINGS PANEL */}
+      <SettingsPanel
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
         onAnchorUpdate={() => setGraphRefreshTrigger(prev => prev + 1)}
-      />
-
-      {/* 10. EXTRACTION SETTINGS */}
-      <ExtractionSettings
-        isOpen={showExtractionSettings}
-        onClose={() => setShowExtractionSettings(false)}
       />
     </div>
   );
