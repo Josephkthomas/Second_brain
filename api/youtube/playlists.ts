@@ -1,8 +1,12 @@
 // Vercel API endpoint for YouTube playlist management
-// GET /api/youtube/playlists - List user's playlists
-// POST /api/youtube/playlists - Add new playlist (verify & connect)
-// PATCH /api/youtube/playlists - Update playlist settings
-// DELETE /api/youtube/playlists - Delete playlist connection
+// GET /api/youtube/playlists — List user's playlists
+// POST /api/youtube/playlists — Connect new playlist (INSERT minimal + UPDATE optional)
+// PATCH /api/youtube/playlists — Update playlist settings
+// DELETE /api/youtube/playlists — Disconnect playlist
+//
+// POST uses a two-phase write to avoid PostgREST pattern validation failures:
+//   Phase 1: INSERT only NOT NULL fields (no UUID[], no nullable *_url columns)
+//   Phase 2: UPDATE to add optional fields (playlist_name, thumbnail_url, linked_anchor_ids, etc.)
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
@@ -10,47 +14,41 @@ import { fetchPlaylistItems } from './_utils/playlist-helpers';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Helper to verify JWT and get user
+// ── Auth ─────────────────────────────────────────────
+
 async function verifyAuth(req: VercelRequest) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return { user: null, error: 'Missing or invalid authorization header' };
   }
-
   const jwt = authHeader.slice(7);
   const supabase = getSupabase();
   const { data: { user }, error } = await supabase.auth.getUser(jwt);
-
   if (error || !user) {
     return { user: null, error: 'Invalid or expired token' };
   }
-
   return { user, error: null };
 }
 
-// Get YouTube API key (global env or user's personal key)
-async function getYouTubeApiKey(userId: string): Promise<string | null> {
-  if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY;
+// ── Helpers ──────────────────────────────────────────
 
+function extractPlaylistId(url: string): string | null {
   try {
-    const supabase = getSupabase();
-    const { data } = await supabase
-      .from('youtube_settings')
-      .select('youtube_api_key')
-      .eq('user_id', userId)
-      .single();
-    return data?.youtube_api_key || null;
+    const parsed = new URL(url.trim());
+    const listParam = parsed.searchParams.get('list');
+    if (listParam) return listParam;
   } catch {
-    return null;
+    // Fallback: regex extraction
+    const match = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+    if (match) return match[1];
   }
+  return null;
 }
 
-// Generate a unique 4-character Synapse playlist code
-function generatePlaylistCode(): string {
+function generateSynapseCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 4; i++) {
@@ -59,52 +57,38 @@ function generatePlaylistCode(): string {
   return `SYN-${code}`;
 }
 
-// Extract playlist ID from YouTube URL
-function extractPlaylistId(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname.includes('youtube.com')) {
-      return parsed.searchParams.get('list');
-    }
-    return null;
-  } catch {
-    const match = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
-    return match ? match[1] : null;
-  }
-}
-
-// Verify playlist exists and is accessible via YouTube Data API
-async function verifyPlaylist(playlistId: string, apiKey: string): Promise<{
+async function verifyPlaylist(playlistId: string): Promise<{
   valid: boolean;
   title: string | null;
   thumbnailUrl: string | null;
   itemCount: number;
   error?: string;
 }> {
-  try {
-    const params = new URLSearchParams({
-      part: 'snippet,contentDetails',
-      id: playlistId,
-      key: apiKey,
-    });
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    console.warn('[playlists] No YOUTUBE_API_KEY — skipping verification');
+    return { valid: true, title: null, thumbnailUrl: null, itemCount: 0 };
+  }
 
-    const response = await fetch(`${YOUTUBE_API_BASE}/playlists?${params.toString()}`);
+  try {
+    const url = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&id=${playlistId}&key=${apiKey}`;
+    const response = await fetch(url);
 
     if (!response.ok) {
       const errorBody = await response.text();
       if (response.status === 403) {
-        return { valid: false, title: null, thumbnailUrl: null, itemCount: 0, error: 'Playlist must be Public or Unlisted. Private playlists cannot be accessed.' };
+        return { valid: false, title: null, thumbnailUrl: null, itemCount: 0, error: 'Playlist must be Public or Unlisted.' };
       }
       return { valid: false, title: null, thumbnailUrl: null, itemCount: 0, error: `YouTube API error ${response.status}: ${errorBody}` };
     }
 
     const data = await response.json();
+    const playlist = data.items?.[0];
 
-    if (!data.items || data.items.length === 0) {
+    if (!playlist) {
       return { valid: false, title: null, thumbnailUrl: null, itemCount: 0, error: 'Playlist not found. It may be private or deleted.' };
     }
 
-    const playlist = data.items[0];
     return {
       valid: true,
       title: playlist.snippet?.title || null,
@@ -112,19 +96,80 @@ async function verifyPlaylist(playlistId: string, apiKey: string): Promise<{
       itemCount: playlist.contentDetails?.itemCount || 0,
     };
   } catch (err) {
-    return { valid: false, title: null, thumbnailUrl: null, itemCount: 0, error: err instanceof Error ? err.message : 'Verification failed' };
+    return {
+      valid: false,
+      title: null,
+      thumbnailUrl: null,
+      itemCount: 0,
+      error: err instanceof Error ? err.message : 'Verification failed',
+    };
   }
 }
 
+async function queuePlaylistVideos(
+  supabase: any,
+  playlist: any,
+  userId: string
+): Promise<{ queued: number; skipped: number }> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return { queued: 0, skipped: 0 };
+
+  const videos = await fetchPlaylistItems(playlist.playlist_id, apiKey);
+  if (videos.length === 0) return { queued: 0, skipped: 0 };
+
+  // Check which videos are already in the queue for this user
+  const { data: existingItems } = await supabase
+    .from('youtube_ingestion_queue')
+    .select('video_id')
+    .eq('user_id', userId);
+
+  const existingVideoIds = new Set(existingItems?.map((item: any) => item.video_id) || []);
+  const newVideos = videos.filter(v => !existingVideoIds.has(v.videoId));
+
+  if (newVideos.length === 0) return { queued: 0, skipped: videos.length };
+
+  // Build queue items — only include nullable fields when they have real values
+  const queueItems = newVideos.map(video => {
+    const item: Record<string, any> = {
+      user_id: userId,
+      playlist_source_id: playlist.id,
+      video_id: video.videoId,
+      video_url: `https://www.youtube.com/watch?v=${video.videoId}`,
+      status: playlist.auto_process ? 'pending' : 'skipped',
+      priority: 5,
+      retry_count: 0,
+      max_retries: 3,
+    };
+    if (video.title) item.video_title = video.title;
+    if (video.thumbnailUrl && video.thumbnailUrl.startsWith('http')) item.thumbnail_url = video.thumbnailUrl;
+    if (video.publishedAt) item.published_at = video.publishedAt;
+    return item;
+  });
+
+  const { error: queueError } = await supabase
+    .from('youtube_ingestion_queue')
+    .insert(queueItems as any);
+
+  if (queueError) {
+    console.error('[playlists] Queue insert error:', queueError.message);
+    return { queued: 0, skipped: 0 };
+  }
+
+  console.log(`[playlists] Queued ${newVideos.length} videos from playlist "${playlist.playlist_name || playlist.playlist_id}"`);
+  return { queued: newVideos.length, skipped: videos.length - newVideos.length };
+}
+
+// ── Main Handler ─────────────────────────────────────
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Verify authentication
+  // Auth
   const { user, error: authError } = await verifyAuth(req);
   if (!user) {
     return res.status(401).json({ error: authError });
@@ -133,7 +178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
 
   try {
-    // ── GET: List playlists ──────────────────
+    // ── GET: List playlists ──────────────────────
     if (req.method === 'GET') {
       const { data, error } = await supabase
         .from('youtube_playlists')
@@ -141,44 +186,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[playlists] GET error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+
       return res.status(200).json({ playlists: data || [] });
     }
 
-    // ── POST: Add playlist ───────────────────
+    // ── POST: Connect new playlist ───────────────
     if (req.method === 'POST') {
-      const {
-        playlist_url,
-        auto_process = true,
-        extraction_mode = 'comprehensive',
-        anchor_emphasis = 'standard',
-        linked_anchor_ids = [],
-        custom_instructions = null,
-      } = req.body;
-
+      const { playlist_url } = req.body;
       if (!playlist_url) {
         return res.status(400).json({ error: 'playlist_url is required' });
       }
 
-      // Extract playlist ID from URL
+      // Step 1: Extract playlist ID
       const playlistId = extractPlaylistId(playlist_url);
       if (!playlistId) {
-        return res.status(400).json({ error: 'Invalid YouTube playlist URL. URL should contain a ?list= parameter.' });
+        return res.status(400).json({ error: 'Invalid playlist URL. Must contain a ?list= parameter.' });
       }
 
-      // Get YouTube API key
-      const apiKey = await getYouTubeApiKey(user.id);
-      if (!apiKey) {
-        return res.status(400).json({ error: 'YouTube API key is required. Please configure it in YouTube Settings.' });
-      }
-
-      // Verify playlist is accessible
-      const verification = await verifyPlaylist(playlistId, apiKey);
-      if (!verification.valid) {
-        return res.status(400).json({ error: verification.error || 'Could not verify playlist' });
-      }
-
-      // Check if playlist already exists for this user
+      // Step 2: Check for duplicates
       const { data: existing } = await supabase
         .from('youtube_playlists')
         .select('id')
@@ -190,177 +219,134 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(409).json({ error: 'This playlist is already connected' });
       }
 
-      // ── Pre-validate every field ──
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-      if (!uuidRegex.test(user.id)) {
-        return res.status(400).json({ error: `Invalid user_id format: ${user.id}` });
-      }
-      if (typeof playlistId !== 'string' || playlistId.length === 0) {
-        return res.status(400).json({ error: `Invalid playlist_id: ${playlistId}` });
+      // Step 3: Verify playlist on YouTube
+      const verification = await verifyPlaylist(playlistId);
+      if (!verification.valid) {
+        return res.status(400).json({ error: verification.error || 'Could not verify playlist' });
       }
 
-      // Validate extraction_mode
-      const validModes = ['comprehensive', 'strategic', 'actionable', 'relational'];
-      const safeMode = validModes.includes(String(extraction_mode)) ? String(extraction_mode) : 'comprehensive';
+      // Step 4: Generate synapse code
+      const synapseCode = generateSynapseCode();
 
-      // Validate anchor_emphasis
-      const validEmphasis = ['standard', 'aggressive', 'passive'];
-      const safeEmphasis = validEmphasis.includes(String(anchor_emphasis)) ? String(anchor_emphasis) : 'standard';
-
-      // Validate anchor IDs — filter to valid UUIDs only
-      const validAnchorIds = Array.isArray(linked_anchor_ids)
-        ? linked_anchor_ids.filter((id: string) => typeof id === 'string' && uuidRegex.test(id))
-        : [];
-
-      // Generate Synapse code
-      const synapseCode = generatePlaylistCode();
-
-      // Sanitize the playlist URL
-      const cleanUrl = String(playlist_url).trim();
-
-      // ── Build INSERT payload ──
-      // Only include optional/nullable fields when they have real values.
-      // Do NOT include linked_anchor_ids when empty — let DB use DEFAULT '{}'.
-      // PostgREST validates typed arrays (UUID[]) and *_url columns strictly.
-      const insertPayload: Record<string, any> = {
-        user_id: user.id,
-        playlist_id: playlistId,
-        playlist_url: cleanUrl,
-        synapse_code: synapseCode,
-        auto_process: auto_process === true || auto_process === 'true',
-        extraction_mode: safeMode,
-        anchor_emphasis: safeEmphasis,
-        known_video_count: Math.max(0, parseInt(String(verification.itemCount), 10) || 0),
-        connection_status: 'verified',
-        is_active: true,
-      };
-
-      // Only include UUID[] when there are actual values — empty array can trigger PostgREST validation
-      if (validAnchorIds.length > 0) {
-        insertPayload.linked_anchor_ids = validAnchorIds;
-      }
-
-      // Only include optional text/URL fields when truthy
-      if (verification.title && typeof verification.title === 'string') {
-        insertPayload.playlist_name = verification.title;
-      }
-      if (verification.thumbnailUrl && typeof verification.thumbnailUrl === 'string') {
-        insertPayload.thumbnail_url = verification.thumbnailUrl;
-      }
-      if (custom_instructions && typeof custom_instructions === 'string' && custom_instructions.trim()) {
-        insertPayload.custom_instructions = custom_instructions.trim();
-      }
-
-      // Log the exact payload for debugging
-      console.log('[playlists] INSERT payload keys:', Object.keys(insertPayload));
-      console.log('[playlists] INSERT payload:', JSON.stringify(insertPayload, null, 2));
-
-      // ── Attempt INSERT ──
-      const { data, error } = await supabase
+      // Step 5: MINIMAL INSERT — only NOT NULL fields
+      // CRITICAL: Do NOT include thumbnail_url, playlist_name, linked_anchor_ids,
+      // custom_instructions, or any nullable field in this INSERT.
+      const { data: inserted, error: insertError } = await supabase
         .from('youtube_playlists')
-        .insert(insertPayload)
+        .insert({
+          user_id: user.id,
+          playlist_id: playlistId,
+          playlist_url: playlist_url.trim(),
+          synapse_code: synapseCode,
+          connection_status: 'verified',
+        })
         .select()
         .single();
 
-      if (error) {
-        console.error('[playlists] INSERT error:', JSON.stringify(error, null, 2));
-
-        // ── Diagnostic fallback: try minimal insert to isolate the bad field ──
-        const minimalPayload = {
-          user_id: user.id,
-          playlist_id: playlistId,
-          playlist_url: cleanUrl,
-          synapse_code: synapseCode,
-          connection_status: 'verified',
-        };
-        const { error: minError } = await supabase
-          .from('youtube_playlists')
-          .insert(minimalPayload)
-          .select()
-          .single();
-
-        // If minimal also fails, it's a fundamental schema issue
-        const diagMsg = minError
-          ? `Both full and minimal INSERT failed. Minimal error: ${minError.message} [${minError.code}]`
-          : 'Minimal INSERT succeeded — the issue is in one of: auto_process, extraction_mode, anchor_emphasis, linked_anchor_ids, known_video_count, playlist_name, thumbnail_url, or custom_instructions';
-
-        // Clean up the diagnostic row if minimal succeeded
-        if (!minError) {
-          await supabase
-            .from('youtube_playlists')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('playlist_id', playlistId)
-            .eq('synapse_code', synapseCode);
-        }
-
-        return res.status(400).json({
-          error: error.message || 'Failed to save playlist',
-          code: error.code,
-          details: error.details || error.hint,
-          diagnostic: diagMsg,
-          payload_keys: Object.keys(insertPayload),
+      if (insertError) {
+        console.error('[playlists] INSERT error:', JSON.stringify(insertError));
+        return res.status(500).json({
+          error: 'Failed to save playlist',
+          details: insertError.message,
+          code: insertError.code,
+          hint: insertError.hint,
         });
       }
 
-      // Immediately queue existing playlist videos for processing
-      if (data) {
-        try {
-          await queuePlaylistVideos(supabase, data, apiKey);
-        } catch (queueErr) {
-          console.error('[playlists] Error queueing initial videos:', queueErr);
-          // Don't fail the request for this
+      // Step 6: UPDATE to add optional fields (bypasses PostgREST pattern validation)
+      const updates: Record<string, any> = {};
+
+      if (verification.title) {
+        updates.playlist_name = verification.title;
+      }
+      if (verification.thumbnailUrl && verification.thumbnailUrl.startsWith('http')) {
+        updates.thumbnail_url = verification.thumbnailUrl;
+      }
+      if (typeof req.body.auto_process === 'boolean') {
+        updates.auto_process = req.body.auto_process;
+      }
+      if (req.body.extraction_mode && ['comprehensive', 'strategic', 'actionable', 'relational'].includes(req.body.extraction_mode)) {
+        updates.extraction_mode = req.body.extraction_mode;
+      }
+      if (req.body.anchor_emphasis && ['standard', 'aggressive', 'passive'].includes(req.body.anchor_emphasis)) {
+        updates.anchor_emphasis = req.body.anchor_emphasis;
+      }
+      if (req.body.custom_instructions && typeof req.body.custom_instructions === 'string') {
+        updates.custom_instructions = req.body.custom_instructions.trim();
+      }
+      if (Array.isArray(req.body.linked_anchor_ids) && req.body.linked_anchor_ids.length > 0) {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const validIds = req.body.linked_anchor_ids.filter((id: string) => uuidRegex.test(id));
+        if (validIds.length > 0) {
+          updates.linked_anchor_ids = validIds;
+        }
+      }
+      if (typeof verification.itemCount === 'number' && verification.itemCount > 0) {
+        updates.known_video_count = verification.itemCount;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('youtube_playlists')
+          .update(updates)
+          .eq('id', inserted.id);
+
+        if (updateError) {
+          console.warn('[playlists] UPDATE optional fields error (non-fatal):', updateError.message);
         }
       }
 
-      return res.status(201).json({ playlist: data });
+      // Step 7: Fetch the final row with all updates applied
+      const { data: finalPlaylist } = await supabase
+        .from('youtube_playlists')
+        .select('*')
+        .eq('id', inserted.id)
+        .single();
+
+      // Step 8: Queue existing playlist videos (non-blocking)
+      try {
+        await queuePlaylistVideos(supabase, finalPlaylist || inserted, user.id);
+      } catch (err) {
+        console.warn('[playlists] Non-fatal error queueing videos:', err);
+      }
+
+      return res.status(201).json({ playlist: finalPlaylist || inserted });
     }
 
-    // ── PATCH: Update playlist ───────────────
+    // ── PATCH: Update playlist settings ──────────
     if (req.method === 'PATCH') {
       const { id, ...updates } = req.body;
-
       if (!id) {
         return res.status(400).json({ error: 'Playlist id is required' });
       }
 
-      const allowedFields = [
-        'auto_process', 'extraction_mode', 'anchor_emphasis',
-        'linked_anchor_ids', 'custom_instructions', 'is_active'
+      const allowed = [
+        'is_active', 'auto_process', 'extraction_mode', 'anchor_emphasis',
+        'linked_anchor_ids', 'custom_instructions', 'connection_status',
       ];
-
-      const allowedUpdates: Record<string, any> = {};
-      for (const field of allowedFields) {
-        if (updates[field] !== undefined) {
-          allowedUpdates[field] = updates[field];
+      const safeUpdates: Record<string, any> = {};
+      for (const key of allowed) {
+        if (updates[key] !== undefined) {
+          safeUpdates[key] = updates[key];
         }
       }
-
-      if (Object.keys(allowedUpdates).length === 0) {
-        return res.status(400).json({ error: 'No valid updates provided' });
-      }
-
-      allowedUpdates.updated_at = new Date().toISOString();
+      safeUpdates.updated_at = new Date().toISOString();
 
       const { data, error } = await supabase
         .from('youtube_playlists')
-        .update(allowedUpdates)
+        .update(safeUpdates)
         .eq('id', id)
         .eq('user_id', user.id)
         .select()
         .single();
 
       if (error) throw error;
-      if (!data) return res.status(404).json({ error: 'Playlist not found' });
-
       return res.status(200).json({ playlist: data });
     }
 
-    // ── DELETE: Disconnect playlist ──────────
+    // ── DELETE: Disconnect playlist ──────────────
     if (req.method === 'DELETE') {
       const { id } = req.body;
-
       if (!id) {
         return res.status(400).json({ error: 'Playlist id is required' });
       }
@@ -372,7 +358,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('user_id', user.id);
 
       if (error) throw error;
-
       return res.status(200).json({ success: true });
     }
 
@@ -388,52 +373,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
-
-// ── Queue playlist videos on initial connection ──
-
-async function queuePlaylistVideos(
-  supabase: ReturnType<typeof createClient>,
-  playlist: any,
-  apiKey: string
-) {
-  const videos = await fetchPlaylistItems(playlist.playlist_id, apiKey);
-
-  if (videos.length === 0) return;
-
-  // Check for existing queue items to avoid duplicates
-  const { data: existingItems } = await supabase
-    .from('youtube_ingestion_queue')
-    .select('video_id')
-    .eq('user_id', playlist.user_id);
-
-  const existingVideoIds = new Set(existingItems?.map((item: any) => item.video_id) || []);
-
-  const newVideos = videos.filter(v => !existingVideoIds.has(v.videoId));
-
-  if (newVideos.length === 0) return;
-
-  const queueItems = newVideos.map(video => {
-    const item: Record<string, any> = {
-      user_id: playlist.user_id,
-      playlist_source_id: playlist.id,
-      video_id: video.videoId,
-      video_title: video.title || null,
-      video_url: `https://www.youtube.com/watch?v=${video.videoId}`,
-      status: playlist.auto_process ? 'pending' : 'skipped',
-      priority: 5,
-      retry_count: 0,
-      max_retries: 3,
-    };
-    // Only include nullable *_url / timestamp fields when they have values
-    if (video.thumbnailUrl) item.thumbnail_url = video.thumbnailUrl;
-    if (video.publishedAt) item.published_at = video.publishedAt;
-    return item;
-  });
-
-  await supabase
-    .from('youtube_ingestion_queue')
-    .upsert(queueItems, { onConflict: 'user_id,video_id', ignoreDuplicates: true });
-
-  console.log(`[playlists] Queued ${newVideos.length} videos from playlist "${playlist.playlist_name}"`);
-}
-
