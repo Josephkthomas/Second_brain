@@ -4,7 +4,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   ListVideo, Plus, Link, Tag, Settings2, Loader2, CheckCircle, AlertCircle,
-  ExternalLink, Trash2, Pause, Play, Eye, EyeOff, ChevronDown, ArrowRight
+  ExternalLink, Trash2, Pause, Play, Eye, EyeOff, ChevronDown, ArrowRight,
+  Save, X
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -60,6 +61,16 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
   // Queue banner
   const [queuedCount, setQueuedCount] = useState<number | null>(null);
 
+  // Edit settings panel
+  const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
+  const [editAutoProcess, setEditAutoProcess] = useState(true);
+  const [editExtractionMode, setEditExtractionMode] = useState<ExtractionMode>('comprehensive');
+  const [editAnchorEmphasis, setEditAnchorEmphasis] = useState<AnchorEmphasis>('standard');
+  const [editLinkedAnchorIds, setEditLinkedAnchorIds] = useState<string[]>([]);
+  const [editCustomInstructions, setEditCustomInstructions] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   // Fetch playlists
   const fetchPlaylists = useCallback(async () => {
     if (!session?.access_token) return;
@@ -67,22 +78,15 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
       const res = await fetch('/api/youtube/playlists', {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-      let data: any;
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        data = await res.json();
-      } else {
-        const text = await res.text();
-        data = { error: `Non-JSON response (${res.status}): ${text.slice(0, 300)}` };
-      }
+      const data = await res.json();
       if (res.ok) {
         setPlaylists(data.playlists || []);
         setError(null);
       } else {
-        setError(`GET /api/youtube/playlists → ${res.status}: ${JSON.stringify(data).slice(0, 500)}`);
+        setError(data.error || 'Failed to fetch playlists');
       }
-    } catch (err) {
-      setError(`Network error fetching playlists: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      setError('Failed to fetch playlists');
     } finally {
       setIsLoading(false);
     }
@@ -147,16 +151,9 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
         }),
       });
 
-      let data: any;
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        data = await res.json();
-      } else {
-        const text = await res.text();
-        data = { error: `Non-JSON response (${res.status}): ${text.slice(0, 500)}` };
-      }
+      const data = await res.json();
       if (!res.ok) {
-        throw new Error(`POST ${res.status}: ${JSON.stringify(data).slice(0, 800)}`);
+        throw new Error(data.error || 'Failed to connect playlist');
       }
 
       setSubmitSuccess(`Connected "${data.playlist?.playlist_name || 'playlist'}" successfully!`);
@@ -207,6 +204,59 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
     setLinkedAnchorIds(prev =>
       prev.includes(anchorId) ? prev.filter(id => id !== anchorId) : [...prev, anchorId]
     );
+  };
+
+  // ── Edit settings ──────────────────────────
+
+  const openEditPanel = (pl: YouTubePlaylist) => {
+    if (editingPlaylistId === pl.id) {
+      setEditingPlaylistId(null);
+      return;
+    }
+    setEditingPlaylistId(pl.id);
+    setEditAutoProcess(pl.auto_process);
+    setEditExtractionMode(pl.extraction_mode);
+    setEditAnchorEmphasis(pl.anchor_emphasis);
+    setEditLinkedAnchorIds(pl.linked_anchor_ids || []);
+    setEditCustomInstructions(pl.custom_instructions || '');
+    setEditError(null);
+  };
+
+  const toggleEditAnchor = (anchorId: string) => {
+    setEditLinkedAnchorIds(prev =>
+      prev.includes(anchorId) ? prev.filter(id => id !== anchorId) : [...prev, anchorId]
+    );
+  };
+
+  const handleSaveEdit = async () => {
+    if (!session?.access_token || !editingPlaylistId) return;
+    try {
+      setIsSavingEdit(true);
+      setEditError(null);
+      const res = await fetch('/api/youtube/playlists', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          id: editingPlaylistId,
+          auto_process: editAutoProcess,
+          extraction_mode: editExtractionMode,
+          anchor_emphasis: editAnchorEmphasis,
+          linked_anchor_ids: editLinkedAnchorIds,
+          custom_instructions: editCustomInstructions.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save settings');
+      setEditingPlaylistId(null);
+      fetchPlaylists();
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setIsSavingEdit(false);
+    }
   };
 
   if (isLoading) {
@@ -440,6 +490,18 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
                         {expandedPlaylistId === pl.id ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                       <button
+                        onClick={() => openEditPanel(pl)}
+                        className={clsx(
+                          'p-2 rounded-lg transition-colors',
+                          editingPlaylistId === pl.id
+                            ? 'text-cyan-400 bg-cyan-500/10'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        )}
+                        title="Edit Settings"
+                      >
+                        <Settings2 className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => handleToggle(pl)}
                         className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
                         title={pl.is_active ? 'Pause' : 'Resume'}
@@ -465,6 +527,150 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
                     </div>
                   </div>
                 </div>
+
+                {/* Edit Settings Panel */}
+                {editingPlaylistId === pl.id && (
+                  <div className="mt-1 bg-slate-950 border border-slate-700 rounded-xl p-4 space-y-4 animate-in slide-in-from-top-2 fade-in">
+                    <div className="flex items-center justify-between mb-1">
+                      <h4 className="text-sm font-medium text-white flex items-center gap-2">
+                        <Settings2 className="w-4 h-4 text-cyan-400" />
+                        Playlist Settings
+                      </h4>
+                      <button
+                        onClick={() => setEditingPlaylistId(null)}
+                        className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Auto-process toggle */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setEditAutoProcess(!editAutoProcess)}
+                        className={clsx(
+                          'w-9 h-5 rounded-full transition-colors relative flex-shrink-0',
+                          editAutoProcess ? 'bg-red-600' : 'bg-slate-700'
+                        )}
+                      >
+                        <span className={clsx(
+                          'absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform',
+                          editAutoProcess ? 'left-[18px]' : 'left-0.5'
+                        )} />
+                      </button>
+                      <span className="text-xs text-slate-400">Auto-process new videos</span>
+                    </div>
+
+                    {/* Extraction Mode */}
+                    <div>
+                      <label className="text-xs font-medium text-slate-400 mb-1.5 block">Extraction Mode</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {EXTRACTION_MODES.map(m => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => setEditExtractionMode(m.id)}
+                            className={clsx(
+                              'px-2.5 py-1 rounded-md text-xs transition-colors border',
+                              editExtractionMode === m.id
+                                ? 'border-cyan-500 bg-cyan-900/20 text-cyan-400'
+                                : 'border-slate-700 text-slate-500 hover:border-slate-600'
+                            )}
+                            title={m.desc}
+                          >
+                            {m.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Anchor Emphasis */}
+                    <div>
+                      <label className="text-xs font-medium text-slate-400 mb-1.5 block">Anchor Emphasis</label>
+                      <div className="flex gap-1.5">
+                        {ANCHOR_EMPHASIS_OPTIONS.map(o => (
+                          <button
+                            key={o.id}
+                            type="button"
+                            onClick={() => setEditAnchorEmphasis(o.id)}
+                            className={clsx(
+                              'px-2.5 py-1 rounded-md text-xs transition-colors border',
+                              editAnchorEmphasis === o.id
+                                ? 'border-cyan-500 bg-cyan-900/20 text-cyan-400'
+                                : 'border-slate-700 text-slate-500 hover:border-slate-600'
+                            )}
+                          >
+                            {o.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Linked Anchors */}
+                    {anchors.length > 0 && (
+                      <div>
+                        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-400 mb-2">
+                          <Tag className="w-3 h-3" /> Linked Anchors
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {anchors.map(a => (
+                            <button
+                              key={a.id}
+                              type="button"
+                              onClick={() => toggleEditAnchor(a.id)}
+                              className={clsx(
+                                'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
+                                editLinkedAnchorIds.includes(a.id)
+                                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50'
+                                  : 'bg-slate-800 text-slate-500 border border-slate-700 hover:border-slate-600'
+                              )}
+                            >
+                              {a.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Custom Instructions */}
+                    <div>
+                      <label className="text-xs font-medium text-slate-400 mb-1.5 block">Custom Instructions</label>
+                      <textarea
+                        value={editCustomInstructions}
+                        onChange={e => setEditCustomInstructions(e.target.value)}
+                        placeholder="e.g., Focus on technical concepts, ignore sponsor segments..."
+                        className="w-full h-16 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs placeholder-slate-500 focus:border-cyan-500 focus:outline-none resize-none"
+                      />
+                    </div>
+
+                    {/* Error */}
+                    {editError && (
+                      <div className="flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+                        <AlertCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+                        <p className="text-red-400 text-xs">{editError}</p>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        onClick={() => setEditingPlaylistId(null)}
+                        className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveEdit}
+                        disabled={isSavingEdit}
+                        className="flex items-center gap-1.5 px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {isSavingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                        {isSavingEdit ? 'Saving...' : 'Save Settings'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Video Browser (expanded) */}
                 {expandedPlaylistId === pl.id && (

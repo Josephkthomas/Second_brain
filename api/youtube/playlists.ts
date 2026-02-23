@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -58,62 +58,6 @@ function generateSynapseCode(): string {
   return `SYN-${code}`;
 }
 
-interface PlaylistVideo {
-  videoId: string;
-  title: string;
-  thumbnailUrl: string;
-  publishedAt: string;
-  channelTitle: string;
-}
-
-async function fetchPlaylistItems(
-  playlistId: string,
-  apiKey: string,
-  maxVideos: number = 200
-): Promise<PlaylistVideo[]> {
-  const videos: PlaylistVideo[] = [];
-  let nextPageToken: string | null = null;
-
-  do {
-    const params = new URLSearchParams({
-      part: 'snippet,contentDetails',
-      playlistId,
-      maxResults: '50',
-      key: apiKey,
-    });
-    if (nextPageToken) params.set('pageToken', nextPageToken);
-
-    const response = await fetch(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`);
-    if (!response.ok) break;
-
-    const data = await response.json();
-    for (const item of data.items || []) {
-      const videoId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId;
-      if (!videoId) continue;
-      const title = item.snippet?.title || '';
-      if (title === 'Deleted video' || title === 'Private video') continue;
-
-      videos.push({
-        videoId,
-        title: title || 'Untitled',
-        thumbnailUrl:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        publishedAt:
-          item.contentDetails?.videoPublishedAt ||
-          item.snippet?.publishedAt ||
-          new Date().toISOString(),
-        channelTitle: item.snippet?.videoOwnerChannelTitle || '',
-      });
-      if (videos.length >= maxVideos) return videos;
-    }
-    nextPageToken = data.nextPageToken || null;
-  } while (nextPageToken);
-
-  return videos;
-}
-
 async function verifyPlaylist(playlistId: string): Promise<{
   valid: boolean;
   title: string | null;
@@ -128,7 +72,7 @@ async function verifyPlaylist(playlistId: string): Promise<{
   }
 
   try {
-    const url = `${YOUTUBE_API_BASE}/playlists?part=snippet,contentDetails&id=${playlistId}&key=${apiKey}`;
+    const url = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&id=${playlistId}&key=${apiKey}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -161,57 +105,6 @@ async function verifyPlaylist(playlistId: string): Promise<{
       error: err instanceof Error ? err.message : 'Verification failed',
     };
   }
-}
-
-async function queuePlaylistVideos(
-  supabase: any,
-  playlist: any,
-  userId: string
-): Promise<{ queued: number; skipped: number }> {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return { queued: 0, skipped: 0 };
-
-  const videos = await fetchPlaylistItems(playlist.playlist_id, apiKey);
-  if (videos.length === 0) return { queued: 0, skipped: 0 };
-
-  const { data: existingItems } = await supabase
-    .from('youtube_ingestion_queue')
-    .select('video_id')
-    .eq('user_id', userId);
-
-  const existingVideoIds = new Set((existingItems || []).map((item: any) => item.video_id));
-  const newVideos = videos.filter(v => !existingVideoIds.has(v.videoId));
-
-  if (newVideos.length === 0) return { queued: 0, skipped: videos.length };
-
-  const queueItems = newVideos.map(video => {
-    const item: Record<string, any> = {
-      user_id: userId,
-      playlist_source_id: playlist.id,
-      video_id: video.videoId,
-      video_url: `https://www.youtube.com/watch?v=${video.videoId}`,
-      status: playlist.auto_process ? 'pending' : 'skipped',
-      priority: 5,
-      retry_count: 0,
-      max_retries: 3,
-    };
-    if (video.title) item.video_title = video.title;
-    if (video.thumbnailUrl && video.thumbnailUrl.startsWith('http')) item.thumbnail_url = video.thumbnailUrl;
-    if (video.publishedAt) item.published_at = video.publishedAt;
-    return item;
-  });
-
-  const { error: queueError } = await supabase
-    .from('youtube_ingestion_queue')
-    .insert(queueItems);
-
-  if (queueError) {
-    console.error('[playlists] Queue insert error:', queueError.message);
-    return { queued: 0, skipped: 0 };
-  }
-
-  console.log(`[playlists] Queued ${newVideos.length} videos from playlist "${playlist.playlist_name || playlist.playlist_id}"`);
-  return { queued: newVideos.length, skipped: videos.length - newVideos.length };
 }
 
 // ── Main Handler ─────────────────────────────────────
@@ -349,13 +242,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('*')
         .eq('id', inserted.id)
         .single();
-
-      // Step 8: Queue existing playlist videos (non-blocking)
-      try {
-        await queuePlaylistVideos(supabase, finalPlaylist || inserted, user.id);
-      } catch (err) {
-        console.warn('[playlists] Non-fatal error queueing videos:', err);
-      }
 
       return res.status(201).json({ playlist: finalPlaylist || inserted });
     }
