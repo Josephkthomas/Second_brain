@@ -105,22 +105,42 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
           });
 
           if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
-            const errMsg = data.error || `Server error ${response.status}`;
+            // Try to read error body — FUNCTION_INVOCATION_FAILED returns HTML, not JSON
+            let errMsg: string;
+            try {
+              const data = await response.json();
+              errMsg = data.error || `Server error ${response.status}`;
+            } catch {
+              errMsg = `Server error ${response.status} (function may have crashed)`;
+            }
             consecutiveErrors++;
 
             if (consecutiveErrors >= 3) {
-              setProcessingError(`Processing stopped after 3 consecutive errors: ${errMsg}`);
+              setProcessingError(`Processing stopped after 3 errors: ${errMsg}`);
               break;
             }
 
-            setProcessingError(`Error on batch (retrying): ${errMsg}`);
+            setProcessingError(`Error (attempt ${consecutiveErrors}/3): ${errMsg}`);
             await new Promise(resolve => setTimeout(resolve, 3000));
             continue;
           }
 
           consecutiveErrors = 0;
           const result = await response.json();
+          console.log('[Queue] Process response:', JSON.stringify(result));
+
+          // If API returned 0 processed but we expect pending items, show diagnostic
+          if ((result.processed || 0) === 0 && totalProcessed === 0) {
+            const diag = result.diagnostics;
+            if (diag) {
+              const counts = diag.status_counts || {};
+              const parts = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ');
+              setProcessingError(`No items were processed. Queue status: ${parts || 'empty'}. Try refreshing the page.`);
+            } else {
+              setProcessingError('No items were processed. The server may not have found pending items.');
+            }
+            break;
+          }
 
           totalProcessed += result.processed || 0;
           totalCompleted += result.completed || 0;

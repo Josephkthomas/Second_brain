@@ -119,8 +119,199 @@ async function verifyUserAuth(req: VercelRequest): Promise<{ user: { id: string 
   return { user: { id: user.id }, isCron: false };
 }
 
-// Tiered transcript extraction (replaces single-tier Apify approach)
-import { extractTranscript } from '../../services/transcriptExtractor';
+// ── Inlined Transcript Extraction ────────────────────────────────
+// Inlined to avoid cross-directory import bundling issues on Vercel serverless.
+// Tiered extraction: youtube-caption-extractor → Innertube API → Apify → fail
+
+interface TieredTranscriptResult {
+  success: boolean;
+  transcript: string | null;
+  language: string | null;
+  method: 'caption_extractor' | 'innertube' | 'apify' | 'manual';
+  is_auto_generated: boolean;
+  error?: string;
+  duration_ms: number;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise
+      .then((result) => { clearTimeout(timer); resolve(result); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+async function tier1CaptionExtractor(videoId: string): Promise<string | null> {
+  const { getSubtitles } = await import('youtube-caption-extractor');
+  const subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
+  if (!subtitles || subtitles.length === 0) return null;
+  const transcript = subtitles
+    .map((s: { text: string }) => s.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return transcript.length > 50 ? transcript : null;
+}
+
+async function fetchViaInnertube(videoId: string): Promise<string | null> {
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const pageResponse = await fetch(videoUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  const html = await pageResponse.text();
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+  if (!apiKeyMatch) return null;
+  const apiKey = apiKeyMatch[1];
+
+  const playerResponse = await fetch(
+    `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: { client: { clientName: 'ANDROID', clientVersion: '17.31.35', hl: 'en' } },
+        videoId,
+      }),
+    }
+  );
+  const playerData = await playerResponse.json();
+  const captionTracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!captionTracks || captionTracks.length === 0) return null;
+
+  const track = captionTracks.find((t: any) => t.languageCode === 'en') || captionTracks[0];
+  if (!track?.baseUrl) return null;
+
+  const captionResponse = await fetch(track.baseUrl);
+  const captionXml = await captionResponse.text();
+
+  const textSegments: string[] = [];
+  const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
+  let match;
+  while ((match = textRegex.exec(captionXml)) !== null) {
+    let text = match[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/<[^>]+>/g, '')
+      .trim();
+    if (text) textSegments.push(text);
+  }
+  return textSegments.join(' ').replace(/\s+/g, ' ').trim() || null;
+}
+
+async function fetchViaApify(
+  videoUrl: string,
+  apifyApiKey: string
+): Promise<{ success: boolean; transcript: string | null; language: string | null; is_auto_generated: boolean; error?: string }> {
+  const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
+  const runResponse = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apifyApiKey}` },
+      body: JSON.stringify({ videoUrl }),
+    }
+  );
+  if (!runResponse.ok) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify run failed: ${runResponse.status}` };
+  }
+  const runData = await runResponse.json();
+  const runId = runData.data?.id;
+  const status = runData.data?.status;
+  if (status !== 'SUCCEEDED') {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify status: ${status}` };
+  }
+  const resultsResponse = await fetch(
+    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
+    { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
+  );
+  const results = await resultsResponse.json();
+  if (!results || results.length === 0) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript found' };
+  }
+  const firstResult = results[0];
+  let transcript: string;
+  if (firstResult.data && Array.isArray(firstResult.data)) {
+    transcript = firstResult.data.map((seg: { text?: string }) => seg.text || '').join(' ').replace(/\s+/g, ' ').trim();
+  } else if (firstResult.transcript) {
+    transcript = firstResult.transcript;
+  } else {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'Unexpected format' };
+  }
+  if (!transcript || transcript.length < 50) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'Transcript too short' };
+  }
+  return { success: true, transcript, language: firstResult.language || 'en', is_auto_generated: firstResult.isAutoGenerated ?? true };
+}
+
+async function extractTranscript(
+  videoId: string,
+  videoUrl: string,
+  apifyApiKey?: string
+): Promise<TieredTranscriptResult> {
+  const overallStart = Date.now();
+  const errors: string[] = [];
+
+  // Tier 1: youtube-caption-extractor
+  try {
+    console.log(`[Transcript] Tier 1: caption-extractor for ${videoId}`);
+    const result = await withTimeout(tier1CaptionExtractor(videoId), 15000, 'Tier 1 timed out');
+    if (result && result.length > 50) {
+      console.log(`[Transcript] Tier 1 SUCCESS: ${result.length} chars`);
+      return { success: true, transcript: result, language: 'en', method: 'caption_extractor', is_auto_generated: true, duration_ms: Date.now() - overallStart };
+    }
+    errors.push('Tier 1: Empty or too short');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Tier 1: ${msg}`);
+    console.warn(`[Transcript] Tier 1 failed: ${msg}`);
+  }
+
+  // Tier 2: Innertube API
+  try {
+    console.log(`[Transcript] Tier 2: Innertube for ${videoId}`);
+    const result = await withTimeout(fetchViaInnertube(videoId), 15000, 'Tier 2 timed out');
+    if (result && result.length > 50) {
+      console.log(`[Transcript] Tier 2 SUCCESS: ${result.length} chars`);
+      return { success: true, transcript: result, language: 'en', method: 'innertube', is_auto_generated: true, duration_ms: Date.now() - overallStart };
+    }
+    errors.push('Tier 2: Empty or too short');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Tier 2: ${msg}`);
+    console.warn(`[Transcript] Tier 2 failed: ${msg}`);
+  }
+
+  // Tier 3: Apify
+  if (apifyApiKey) {
+    try {
+      console.log(`[Transcript] Tier 3: Apify for ${videoId}`);
+      const result = await withTimeout(fetchViaApify(videoUrl, apifyApiKey), 120000, 'Tier 3 timed out');
+      if (result.success && result.transcript && result.transcript.length > 50) {
+        console.log(`[Transcript] Tier 3 SUCCESS: ${result.transcript.length} chars`);
+        return { success: true, transcript: result.transcript, language: result.language || 'en', method: 'apify', is_auto_generated: result.is_auto_generated, duration_ms: Date.now() - overallStart };
+      }
+      errors.push(`Tier 3: ${result.error || 'Empty transcript'}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Tier 3: ${msg}`);
+      console.warn(`[Transcript] Tier 3 failed: ${msg}`);
+    }
+  } else {
+    errors.push('Tier 3: Apify API key not configured');
+  }
+
+  // All tiers failed
+  console.error(`[Transcript] All tiers failed for ${videoId}:`, errors);
+  return {
+    success: false, transcript: null, language: null, method: 'manual', is_auto_generated: false,
+    error: `All transcript extraction methods failed: ${errors.join('; ')}`,
+    duration_ms: Date.now() - overallStart,
+  };
+}
 
 // Extraction schema - comprehensive for knowledge graph
 const EXTRACTION_SCHEMA = {
@@ -472,7 +663,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ── Stuck item recovery ──────────────────────────────
     // Reset items stuck in fetching_transcript or extracting for > 10 minutes
+    // Also catches items with NULL started_at (stuck from before this field existed)
     const stuckCutoff = new Date(Date.now() - STUCK_THRESHOLD_MS).toISOString();
+
+    // Phase 1: Items with started_at older than 10 minutes
     {
       let stuckUpdate = supabase
         .from('youtube_ingestion_queue')
@@ -491,11 +685,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { error: stuckError } = await stuckUpdate;
       if (stuckError) {
-        console.warn('[Process] Failed to reset stuck items:', stuckError.message);
-      } else {
-        console.log('[Process] Checked for stuck items (>10min in processing state)');
+        console.warn('[Process] Failed to reset stuck items (with started_at):', stuckError.message);
       }
     }
+
+    // Phase 2: Items with NULL started_at stuck in processing states
+    {
+      let stuckNullUpdate = supabase
+        .from('youtube_ingestion_queue')
+        .update({
+          status: 'failed',
+          error_message: 'Processing was interrupted (no start time recorded). Click retry to try again.',
+          processing_step: null,
+          completed_at: new Date().toISOString(),
+        })
+        .in('status', ['fetching_transcript', 'extracting'])
+        .is('started_at', null);
+
+      if (!isCron && user?.id) {
+        stuckNullUpdate = stuckNullUpdate.eq('user_id', user.id);
+      }
+
+      const { error: stuckNullError } = await stuckNullUpdate;
+      if (stuckNullError) {
+        console.warn('[Process] Failed to reset stuck items (null started_at):', stuckNullError.message);
+      }
+    }
+
+    console.log('[Process] Stuck item recovery complete');
 
     // Build query for pending items with channel AND playlist info
     let query = supabase
@@ -517,10 +734,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (fetchError) throw fetchError;
 
     if (!queueItems || queueItems.length === 0) {
-      console.log('[Process] No pending items');
+      // Diagnostic: check what items actually exist for this user
+      let diagnostics: any = { reason: 'no_pending_items' };
+      if (user?.id && user.id !== 'cron') {
+        const { data: allItems, error: diagError } = await supabase
+          .from('youtube_ingestion_queue')
+          .select('id, status')
+          .eq('user_id', user.id);
+
+        if (!diagError && allItems) {
+          const counts: Record<string, number> = {};
+          for (const item of allItems) {
+            counts[item.status] = (counts[item.status] || 0) + 1;
+          }
+          diagnostics.user_id = user.id;
+          diagnostics.status_counts = counts;
+          diagnostics.total_items = allItems.length;
+        }
+      }
+
+      console.log('[Process] No pending items. Diagnostics:', JSON.stringify(diagnostics));
       return res.status(200).json({
         success: true,
         processed: 0,
+        remaining: 0,
+        diagnostics,
         duration_ms: Date.now() - startTime,
       });
     }
@@ -567,6 +805,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             transcript_fetched_at: new Date().toISOString(),
           })
           .eq('id', item.id);
+
+        // Check if item was force-cancelled while we were fetching transcript
+        const { data: cancelCheck } = await supabase
+          .from('youtube_ingestion_queue')
+          .select('status')
+          .eq('id', item.id)
+          .single();
+        if (cancelCheck?.status === 'failed') {
+          console.log(`[Process] Item ${item.id} was force-cancelled, skipping extraction`);
+          results.push({ queue_item_id: item.id, status: 'failed', nodes_created: 0, edges_created: 0, error: 'Force cancelled by user' });
+          continue;
+        }
 
         // Get extraction settings — prefer playlist settings for playlist-sourced items, fall back to channel
         const playlistSettings = item.youtube_playlists;
