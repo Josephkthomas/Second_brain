@@ -141,8 +141,10 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
 
       const data = await res.json();
       if (!res.ok) {
-        const detail = data.code ? ` [${data.code}]` : '';
-        throw new Error((data.error || 'Failed to connect playlist') + detail);
+        const parts = [data.error || 'Failed to connect playlist'];
+        if (data.code) parts.push(`[${data.code}]`);
+        if (data.diagnostic) parts.push(`Diagnostic: ${data.diagnostic}`);
+        throw new Error(parts.join(' — '));
       }
 
       setSubmitSuccess(`Connected "${data.playlist?.playlist_name || 'playlist'}" successfully!`);

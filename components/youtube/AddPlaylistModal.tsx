@@ -113,9 +113,10 @@ export default function AddPlaylistModal({ onClose, onSuccess }: AddPlaylistModa
       const data = await response.json();
 
       if (!response.ok) {
-        // Include error code/details if available for debugging
-        const detail = data.code ? ` [${data.code}]` : '';
-        throw new Error((data.error || 'Failed to connect playlist') + detail);
+        const parts = [data.error || 'Failed to connect playlist'];
+        if (data.code) parts.push(`[${data.code}]`);
+        if (data.diagnostic) parts.push(`Diagnostic: ${data.diagnostic}`);
+        throw new Error(parts.join(' — '));
       }
 
       onSuccess();

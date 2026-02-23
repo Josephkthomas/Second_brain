@@ -190,34 +190,73 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(409).json({ error: 'This playlist is already connected' });
       }
 
-      // Validate anchor IDs
+      // ── Pre-validate every field ──
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+      if (!uuidRegex.test(user.id)) {
+        return res.status(400).json({ error: `Invalid user_id format: ${user.id}` });
+      }
+      if (typeof playlistId !== 'string' || playlistId.length === 0) {
+        return res.status(400).json({ error: `Invalid playlist_id: ${playlistId}` });
+      }
+
+      // Validate extraction_mode
+      const validModes = ['comprehensive', 'strategic', 'actionable', 'relational'];
+      const safeMode = validModes.includes(String(extraction_mode)) ? String(extraction_mode) : 'comprehensive';
+
+      // Validate anchor_emphasis
+      const validEmphasis = ['standard', 'aggressive', 'passive'];
+      const safeEmphasis = validEmphasis.includes(String(anchor_emphasis)) ? String(anchor_emphasis) : 'standard';
+
+      // Validate anchor IDs — filter to valid UUIDs only
       const validAnchorIds = Array.isArray(linked_anchor_ids)
-        ? linked_anchor_ids.filter((id: string) => uuidRegex.test(id))
+        ? linked_anchor_ids.filter((id: string) => typeof id === 'string' && uuidRegex.test(id))
         : [];
 
       // Generate Synapse code
       const synapseCode = generatePlaylistCode();
 
-      // Insert playlist — only include nullable fields when they have values
-      // (PostgREST may infer URL-format validation for *_url columns with null values)
+      // Sanitize the playlist URL
+      const cleanUrl = String(playlist_url).trim();
+
+      // ── Build INSERT payload ──
+      // Only include optional/nullable fields when they have real values.
+      // Do NOT include linked_anchor_ids when empty — let DB use DEFAULT '{}'.
+      // PostgREST validates typed arrays (UUID[]) and *_url columns strictly.
       const insertPayload: Record<string, any> = {
         user_id: user.id,
         playlist_id: playlistId,
-        playlist_url: playlist_url.trim(),
+        playlist_url: cleanUrl,
         synapse_code: synapseCode,
-        auto_process: Boolean(auto_process),
-        extraction_mode: String(extraction_mode || 'comprehensive'),
-        anchor_emphasis: String(anchor_emphasis || 'standard'),
-        linked_anchor_ids: validAnchorIds,
-        known_video_count: Number(verification.itemCount) || 0,
+        auto_process: auto_process === true || auto_process === 'true',
+        extraction_mode: safeMode,
+        anchor_emphasis: safeEmphasis,
+        known_video_count: Math.max(0, parseInt(String(verification.itemCount), 10) || 0),
         connection_status: 'verified',
         is_active: true,
       };
-      if (verification.title) insertPayload.playlist_name = verification.title;
-      if (verification.thumbnailUrl) insertPayload.thumbnail_url = verification.thumbnailUrl;
-      if (custom_instructions) insertPayload.custom_instructions = custom_instructions;
 
+      // Only include UUID[] when there are actual values — empty array can trigger PostgREST validation
+      if (validAnchorIds.length > 0) {
+        insertPayload.linked_anchor_ids = validAnchorIds;
+      }
+
+      // Only include optional text/URL fields when truthy
+      if (verification.title && typeof verification.title === 'string') {
+        insertPayload.playlist_name = verification.title;
+      }
+      if (verification.thumbnailUrl && typeof verification.thumbnailUrl === 'string') {
+        insertPayload.thumbnail_url = verification.thumbnailUrl;
+      }
+      if (custom_instructions && typeof custom_instructions === 'string' && custom_instructions.trim()) {
+        insertPayload.custom_instructions = custom_instructions.trim();
+      }
+
+      // Log the exact payload for debugging
+      console.log('[playlists] INSERT payload keys:', Object.keys(insertPayload));
+      console.log('[playlists] INSERT payload:', JSON.stringify(insertPayload, null, 2));
+
+      // ── Attempt INSERT ──
       const { data, error } = await supabase
         .from('youtube_playlists')
         .insert(insertPayload)
@@ -225,11 +264,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (error) {
-        console.error('[playlists] Insert error:', JSON.stringify(error));
+        console.error('[playlists] INSERT error:', JSON.stringify(error, null, 2));
+
+        // ── Diagnostic fallback: try minimal insert to isolate the bad field ──
+        const minimalPayload = {
+          user_id: user.id,
+          playlist_id: playlistId,
+          playlist_url: cleanUrl,
+          synapse_code: synapseCode,
+          connection_status: 'verified',
+        };
+        const { error: minError } = await supabase
+          .from('youtube_playlists')
+          .insert(minimalPayload)
+          .select()
+          .single();
+
+        // If minimal also fails, it's a fundamental schema issue
+        const diagMsg = minError
+          ? `Both full and minimal INSERT failed. Minimal error: ${minError.message} [${minError.code}]`
+          : 'Minimal INSERT succeeded — the issue is in one of: auto_process, extraction_mode, anchor_emphasis, linked_anchor_ids, known_video_count, playlist_name, thumbnail_url, or custom_instructions';
+
+        // Clean up the diagnostic row if minimal succeeded
+        if (!minError) {
+          await supabase
+            .from('youtube_playlists')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('playlist_id', playlistId)
+            .eq('synapse_code', synapseCode);
+        }
+
         return res.status(400).json({
           error: error.message || 'Failed to save playlist',
           code: error.code,
           details: error.details || error.hint,
+          diagnostic: diagMsg,
+          payload_keys: Object.keys(insertPayload),
         });
       }
 
@@ -341,19 +412,23 @@ async function queuePlaylistVideos(
 
   if (newVideos.length === 0) return;
 
-  const queueItems = newVideos.map(video => ({
-    user_id: playlist.user_id,
-    playlist_source_id: playlist.id,
-    video_id: video.videoId,
-    video_title: video.title,
-    video_url: `https://www.youtube.com/watch?v=${video.videoId}`,
-    thumbnail_url: video.thumbnailUrl,
-    published_at: video.publishedAt,
-    status: playlist.auto_process ? 'pending' : 'skipped',
-    priority: 5,
-    retry_count: 0,
-    max_retries: 3,
-  }));
+  const queueItems = newVideos.map(video => {
+    const item: Record<string, any> = {
+      user_id: playlist.user_id,
+      playlist_source_id: playlist.id,
+      video_id: video.videoId,
+      video_title: video.title || null,
+      video_url: `https://www.youtube.com/watch?v=${video.videoId}`,
+      status: playlist.auto_process ? 'pending' : 'skipped',
+      priority: 5,
+      retry_count: 0,
+      max_retries: 3,
+    };
+    // Only include nullable *_url / timestamp fields when they have values
+    if (video.thumbnailUrl) item.thumbnail_url = video.thumbnailUrl;
+    if (video.publishedAt) item.published_at = video.publishedAt;
+    return item;
+  });
 
   await supabase
     .from('youtube_ingestion_queue')
