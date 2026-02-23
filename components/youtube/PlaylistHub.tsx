@@ -67,14 +67,22 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
       const res = await fetch('/api/youtube/playlists', {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-      const data = await res.json();
+      let data: any;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        data = { error: `Non-JSON response (${res.status}): ${text.slice(0, 300)}` };
+      }
       if (res.ok) {
         setPlaylists(data.playlists || []);
+        setError(null);
       } else {
-        setError(data.error || 'Failed to fetch playlists');
+        setError(`GET /api/youtube/playlists → ${res.status}: ${JSON.stringify(data).slice(0, 500)}`);
       }
-    } catch {
-      setError('Failed to fetch playlists');
+    } catch (err) {
+      setError(`Network error fetching playlists: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -139,12 +147,16 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
         }),
       });
 
-      const data = await res.json();
+      let data: any;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        data = { error: `Non-JSON response (${res.status}): ${text.slice(0, 500)}` };
+      }
       if (!res.ok) {
-        const parts = [data.error || 'Failed to connect playlist'];
-        if (data.code) parts.push(`[${data.code}]`);
-        if (data.diagnostic) parts.push(`Diagnostic: ${data.diagnostic}`);
-        throw new Error(parts.join(' — '));
+        throw new Error(`POST ${res.status}: ${JSON.stringify(data).slice(0, 800)}`);
       }
 
       setSubmitSuccess(`Connected "${data.playlist?.playlist_name || 'playlist'}" successfully!`);
