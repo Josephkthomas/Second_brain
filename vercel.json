@@ -47,7 +47,7 @@
     },
     {
       "path": "/api/youtube/poll-playlist",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
 }

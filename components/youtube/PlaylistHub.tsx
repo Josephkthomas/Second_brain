@@ -1,11 +1,11 @@
 // PlaylistHub — Playlist-first YouTube ingestion page
 // Inline form to connect playlists, browse videos, queue for processing
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ListVideo, Plus, Link, Tag, Settings2, Loader2, CheckCircle, AlertCircle,
   ExternalLink, Trash2, Pause, Play, Eye, EyeOff, ChevronDown, ArrowRight,
-  Save, X
+  Save, X, RefreshCw, Clock
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -70,6 +70,14 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
   const [editCustomInstructions, setEditCustomInstructions] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // Scan status
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{ newVideos: number; playlistsChecked: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const scanResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
   // Fetch playlists
   const fetchPlaylists = useCallback(async () => {
@@ -256,6 +264,83 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
       setEditError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
       setIsSavingEdit(false);
+    }
+  };
+
+  // ── Scan status helpers ──────────────────────────
+
+  // Update clock every 30s for countdown
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Derive last polled timestamp from most recent playlist
+  const lastPolledAt = playlists.reduce<string | null>((latest, pl) => {
+    if (!pl.last_polled_at) return latest;
+    if (!latest) return pl.last_polled_at;
+    return new Date(pl.last_polled_at) > new Date(latest) ? pl.last_polled_at : latest;
+  }, null);
+
+  const formatRelativeTime = (dateStr: string | null) => {
+    if (!dateStr) return 'Never';
+    const diff = now - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const getNextScanCountdown = () => {
+    if (!lastPolledAt) return null;
+    const nextScanTime = new Date(lastPolledAt).getTime() + SCAN_INTERVAL_MS;
+    const remaining = nextScanTime - now;
+    if (remaining <= 0) return 'Any moment';
+    const mins = Math.ceil(remaining / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+  };
+
+  const handleScanNow = async () => {
+    if (!session?.access_token || isScanning) return;
+    try {
+      setIsScanning(true);
+      setScanResult(null);
+
+      const res = await fetch('/api/youtube/poll-playlist', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Scan failed');
+      }
+
+      setScanResult({
+        newVideos: data.newVideosQueued || 0,
+        playlistsChecked: data.playlistsPolled || 0,
+      });
+
+      // Clear result toast after 8s
+      if (scanResultTimerRef.current) clearTimeout(scanResultTimerRef.current);
+      scanResultTimerRef.current = setTimeout(() => setScanResult(null), 8000);
+
+      // Refresh playlists to get updated last_polled_at
+      fetchPlaylists();
+    } catch (err) {
+      console.error('Scan failed:', err);
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -447,6 +532,49 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
         <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
           <AlertCircle className="w-4 h-4 text-red-500" />
           <p className="text-red-400 text-xs">{error}</p>
+        </div>
+      )}
+
+      {/* ─── Scan Status Bar ─── */}
+      {playlists.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-lg">
+          <RefreshCw className={clsx('w-3.5 h-3.5 text-slate-500 flex-shrink-0', isScanning && 'animate-spin text-cyan-400')} />
+          <div className="flex items-center gap-3 text-xs text-slate-400 flex-1 min-w-0">
+            <span>Last scan: <span className="text-slate-300">{formatRelativeTime(lastPolledAt)}</span></span>
+            <span className="text-slate-600">•</span>
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Next in: <span className="text-slate-300">{getNextScanCountdown() || '—'}</span>
+            </span>
+          </div>
+
+          {/* Scan result toast */}
+          {scanResult && (
+            <span className="text-xs text-emerald-400 flex items-center gap-1 flex-shrink-0">
+              <CheckCircle className="w-3 h-3" />
+              {scanResult.newVideos > 0
+                ? `${scanResult.newVideos} new video${scanResult.newVideos !== 1 ? 's' : ''} found`
+                : 'No new videos'}
+            </span>
+          )}
+
+          <button
+            onClick={handleScanNow}
+            disabled={isScanning}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {isScanning ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3 h-3" />
+                Scan Now
+              </>
+            )}
+          </button>
         </div>
       )}
 

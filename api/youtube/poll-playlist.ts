@@ -1,18 +1,19 @@
-// Vercel Cron endpoint for polling YouTube playlists
-// Runs every 5 minutes to detect new videos added to connected playlists
+// Vercel Cron + Manual endpoint for polling YouTube playlists
+// Cron: runs every 15 minutes to detect new videos added to connected playlists
+// Manual: POST with user JWT to trigger immediate rescan
 // New videos are queued into youtube_ingestion_queue for processing
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { fetchPlaylistItems, getUserYouTubeApiKey } from './_utils/playlist-helpers';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Verify cron authorization (same pattern as poll.ts)
+// Verify cron authorization
 function verifyCronAuth(req: VercelRequest): boolean {
   const cronAuth = req.headers['authorization'];
   if (cronAuth === `Bearer ${CRON_SECRET}`) return true;
@@ -24,6 +25,23 @@ function verifyCronAuth(req: VercelRequest): boolean {
   return !CRON_SECRET;
 }
 
+// Verify user JWT and return user ID
+async function verifyUserAuth(req: VercelRequest): Promise<string | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return null;
+
+  const token = authHeader.slice(7);
+
+  // Don't treat cron tokens as user tokens
+  if (token === CRON_SECRET) return null;
+  if (req.headers['x-vercel-signature']) return null;
+
+  const supabase = getSupabase();
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) return null;
+  return user.id;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -31,7 +49,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  if (!verifyCronAuth(req)) {
+  // Auth: accept either cron auth or user JWT
+  const userId = await verifyUserAuth(req);
+  const isCron = !userId && verifyCronAuth(req);
+
+  if (!userId && !isCron) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -39,24 +61,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startTime = Date.now();
 
   try {
-    // Fetch all active, verified playlist connections
-    const { data: playlists, error } = await supabase
+    // Fetch active, verified playlists — scope to user if manual trigger
+    let query = supabase
       .from('youtube_playlists')
       .select('*')
       .eq('is_active', true)
       .eq('connection_status', 'verified');
 
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data: playlists, error } = await query;
+
     if (error) throw error;
 
     if (!playlists || playlists.length === 0) {
-      return res.status(200).json({ success: true, playlistsPolled: 0, newVideosQueued: 0 });
+      return res.status(200).json({
+        success: true,
+        playlistsPolled: 0,
+        newVideosQueued: 0,
+        last_polled_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+      });
     }
 
     let totalNewVideos = 0;
 
     for (const playlist of playlists) {
       try {
-        // Get YouTube API key (shared helper checks env + user settings)
         const youtubeApiKey = await getUserYouTubeApiKey(supabase, playlist.user_id);
 
         if (!youtubeApiKey) {
@@ -64,7 +97,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           continue;
         }
 
-        // Fetch playlist items from YouTube Data API
         const videos = await fetchPlaylistItems(playlist.playlist_id, youtubeApiKey);
 
         // Get existing video IDs to avoid duplicates
@@ -77,11 +109,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           existingItems?.map((item: any) => item.video_id) || []
         );
 
-        // Filter to new videos only
         const newVideos = videos.filter(v => !existingVideoIds.has(v.videoId));
 
         if (newVideos.length > 0) {
-          // Insert into ingestion queue
           const queueItems = newVideos.map(video => ({
             user_id: playlist.user_id,
             playlist_source_id: playlist.id,
@@ -128,7 +158,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           err
         );
 
-        // Update connection status on API errors
         await supabase
           .from('youtube_playlists')
           .update({
@@ -144,6 +173,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       success: true,
       playlistsPolled: playlists.length,
       newVideosQueued: totalNewVideos,
+      last_polled_at: new Date().toISOString(),
       duration_ms: Date.now() - startTime,
     });
 
@@ -152,4 +182,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
