@@ -4,7 +4,7 @@ import {
   Sparkles, Clock, BarChart3, ArrowRight, ChevronDown, ChevronUp,
   Mail, Zap, Eye, FileText, Send, Loader2, CheckCircle2, XCircle,
   TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
-  Compass, Share2,
+  Compass, Share2, Info, X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
@@ -49,6 +49,7 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
   // Ad-hoc email state
   const [customEmail, setCustomEmail] = useState('');
   const [sendToStatus, setSendToStatus] = useState<Record<string, DeliveryState>>({});
+  const [showSpamNotice, setShowSpamNotice] = useState(false);
   const { session } = useAuth();
 
   if (!output || !output.executive_summary) {
@@ -95,6 +96,7 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
       const data = await response.json();
       if (data.success && data.results?.email === 'delivered') {
         setSendToStatus(prev => ({ ...prev, [key]: { status: 'delivered' } }));
+        setShowSpamNotice(true);
         setTimeout(() => {
           setSendToStatus(prev => {
             const next = { ...prev };
@@ -317,6 +319,22 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
           )}
         </div>
       </div>
+
+      {/* ─── Spam Notice ─── */}
+      {showSpamNotice && (
+        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+          <Info size={14} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-xs font-medium text-amber-300">Check your spam folder</p>
+            <p className="text-[11px] text-amber-400/70 mt-0.5 leading-relaxed">
+              The first email from Synapse may land in spam. Open it and mark as <strong>"Not spam"</strong> to ensure future digests go straight to your inbox.
+            </p>
+          </div>
+          <button onClick={() => setShowSpamNotice(false)} className="p-0.5 hover:bg-white/10 rounded text-amber-400/50 hover:text-amber-400 transition-colors">
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* ─── Metadata Bar (moved to top) ─── */}
       <div className="flex items-center gap-4 text-[10px] text-slate-500 py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
