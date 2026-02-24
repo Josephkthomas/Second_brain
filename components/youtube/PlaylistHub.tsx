@@ -73,7 +73,12 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
 
   // Scan status
   const [isScanning, setIsScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<{ newVideos: number; playlistsChecked: number } | null>(null);
+  const [scanResult, setScanResult] = useState<{
+    newVideos: number;
+    playlistsChecked: number;
+    playlistResults: Array<{ name: string; totalVideos: number; newVideos: number; status: 'ok' | 'error'; error?: string }>;
+  } | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const scanResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -311,6 +316,7 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
     try {
       setIsScanning(true);
       setScanResult(null);
+      setScanError(null);
 
       const res = await fetch('/api/youtube/poll-playlist', {
         method: 'POST',
@@ -319,6 +325,12 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
           Authorization: `Bearer ${session.access_token}`,
         },
       });
+
+      // Handle HTML error responses (FUNCTION_INVOCATION_FAILED)
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error('Server error — please try again in a moment');
+      }
 
       const data = await res.json();
 
@@ -329,16 +341,20 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
       setScanResult({
         newVideos: data.newVideosQueued || 0,
         playlistsChecked: data.playlistsPolled || 0,
+        playlistResults: data.playlistResults || [],
       });
 
-      // Clear result toast after 8s
+      // Clear result after 12s (longer to give time to read per-playlist results)
       if (scanResultTimerRef.current) clearTimeout(scanResultTimerRef.current);
-      scanResultTimerRef.current = setTimeout(() => setScanResult(null), 8000);
+      scanResultTimerRef.current = setTimeout(() => setScanResult(null), 12000);
 
-      // Refresh playlists to get updated last_polled_at
+      // Refresh playlists to get updated last_polled_at and video counts
       fetchPlaylists();
     } catch (err) {
-      console.error('Scan failed:', err);
+      const msg = err instanceof Error ? err.message : 'Scan failed';
+      console.error('Scan failed:', msg);
+      setScanError(msg);
+      setTimeout(() => setScanError(null), 8000);
     } finally {
       setIsScanning(false);
     }
@@ -537,44 +553,91 @@ export default function PlaylistHub({ onGraphUpdate, onNavigateToQueue }: Playli
 
       {/* ─── Scan Status Bar ─── */}
       {playlists.length > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-lg">
-          <RefreshCw className={clsx('w-3.5 h-3.5 text-slate-500 flex-shrink-0', isScanning && 'animate-spin text-cyan-400')} />
-          <div className="flex items-center gap-3 text-xs text-slate-400 flex-1 min-w-0">
-            <span>Last scan: <span className="text-slate-300">{formatRelativeTime(lastPolledAt)}</span></span>
-            <span className="text-slate-600">•</span>
-            <span className="flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              Next in: <span className="text-slate-300">{getNextScanCountdown() || '—'}</span>
-            </span>
+        <div className="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-2.5">
+            <RefreshCw className={clsx('w-3.5 h-3.5 text-slate-500 flex-shrink-0', isScanning && 'animate-spin text-cyan-400')} />
+            <div className="flex items-center gap-3 text-xs text-slate-400 flex-1 min-w-0">
+              <span>Last scan: <span className="text-slate-300">{formatRelativeTime(lastPolledAt)}</span></span>
+              <span className="text-slate-600">&bull;</span>
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Next in: <span className="text-slate-300">{getNextScanCountdown() || '—'}</span>
+              </span>
+            </div>
+
+            <button
+              onClick={handleScanNow}
+              disabled={isScanning}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              {isScanning ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Scanning {playlists.length} playlist{playlists.length !== 1 ? 's' : ''}...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3 h-3" />
+                  Scan Now
+                </>
+              )}
+            </button>
           </div>
 
-          {/* Scan result toast */}
-          {scanResult && (
-            <span className="text-xs text-emerald-400 flex items-center gap-1 flex-shrink-0">
-              <CheckCircle className="w-3 h-3" />
-              {scanResult.newVideos > 0
-                ? `${scanResult.newVideos} new video${scanResult.newVideos !== 1 ? 's' : ''} found`
-                : 'No new videos'}
-            </span>
+          {/* Scanning in progress — show playlist names being scanned */}
+          {isScanning && (
+            <div className="px-4 pb-3 space-y-1.5">
+              {playlists.filter(p => p.is_active && p.connection_status === 'verified').map((pl, i) => (
+                <div key={pl.id} className="flex items-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="w-3 h-3 animate-spin text-cyan-500/60" />
+                  <span className="truncate">Scanning &ldquo;{pl.playlist_name || 'Untitled'}&rdquo;...</span>
+                </div>
+              ))}
+            </div>
           )}
 
-          <button
-            onClick={handleScanNow}
-            disabled={isScanning}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            {isScanning ? (
-              <>
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Scanning...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-3 h-3" />
-                Scan Now
-              </>
-            )}
-          </button>
+          {/* Scan error */}
+          {scanError && (
+            <div className="px-4 pb-3">
+              <div className="flex items-center gap-2 text-xs text-red-400">
+                <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                <span>Scan failed: {scanError}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Scan results — per-playlist breakdown */}
+          {scanResult && scanResult.playlistResults.length > 0 && (
+            <div className="px-4 pb-3 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs text-emerald-400 mb-1">
+                <CheckCircle className="w-3 h-3" />
+                <span className="font-medium">
+                  Scan complete — {scanResult.newVideos > 0
+                    ? `${scanResult.newVideos} new video${scanResult.newVideos !== 1 ? 's' : ''} queued`
+                    : 'All playlists up to date'}
+                </span>
+              </div>
+              {scanResult.playlistResults.map((pr, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  {pr.status === 'ok' ? (
+                    <CheckCircle className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-3 h-3 text-red-400/60 flex-shrink-0" />
+                  )}
+                  <span className="truncate text-slate-400">{pr.name}</span>
+                  <span className="text-slate-600 flex-shrink-0">&mdash;</span>
+                  {pr.status === 'ok' ? (
+                    <span className={clsx('flex-shrink-0', pr.newVideos > 0 ? 'text-emerald-400' : 'text-slate-500')}>
+                      {pr.newVideos > 0 ? `${pr.newVideos} new` : 'No new videos'}
+                      <span className="text-slate-600 ml-1">({pr.totalVideos} total)</span>
+                    </span>
+                  ) : (
+                    <span className="text-red-400/80 flex-shrink-0">{pr.error || 'Error'}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
