@@ -239,7 +239,7 @@ async function extractFromContent(
   anchors: { label: string; description?: string }[],
   anchorEmphasis: string,
   customInstructions?: string | null
-): Promise<{ nodes: any[]; edges: any[] }> {
+): Promise<{ nodes: any[]; edges: any[]; error?: string }> {
   const ai = getGenAI();
 
   const systemPrompt = buildExtractionPrompt(
@@ -259,14 +259,27 @@ async function extractFromContent(
       }
     });
 
-    const result = cleanAndParseJSON(response.text || '{}');
-    return {
-      nodes: Array.isArray(result.nodes) ? result.nodes : [],
-      edges: Array.isArray(result.edges) ? result.edges : [],
-    };
+    const rawText = response.text || '';
+    console.log(`[Ingest Process] Gemini response length: ${rawText.length} chars`);
+
+    if (!rawText || rawText.trim().length === 0) {
+      return { nodes: [], edges: [], error: 'Gemini returned empty response' };
+    }
+
+    const result = cleanAndParseJSON(rawText);
+    const nodes = Array.isArray(result.nodes) ? result.nodes : [];
+    const edges = Array.isArray(result.edges) ? result.edges : [];
+
+    if (nodes.length === 0 && rawText.length > 10) {
+      console.warn(`[Ingest Process] Gemini returned text but parsed to 0 nodes. Raw (first 500): ${rawText.substring(0, 500)}`);
+      return { nodes, edges, error: `Extraction returned 0 nodes — response may have been malformed (${rawText.length} chars received)` };
+    }
+
+    return { nodes, edges };
   } catch (error) {
-    console.error('[Ingest Process] Extraction error:', error);
-    return { nodes: [], edges: [] };
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('[Ingest Process] Extraction API error:', msg);
+    return { nodes: [], edges: [], error: `Gemini API error: ${msg}` };
   }
 }
 
@@ -475,19 +488,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log(`[Ingest Process] Extracted ${extracted.nodes.length} nodes, ${extracted.edges.length} internal edges`);
 
         if (extracted.nodes.length === 0) {
-          // No nodes extracted — mark completed with zero counts
-          await supabase
-            .from('ingest_queue')
-            .update({
-              status: 'completed',
-              source_id: source?.id || null,
-              nodes_created: 0,
-              edges_created: 0,
-              completed_at: new Date().toISOString(),
-            })
-            .eq('id', item.id);
+          const retryCount = (item.retry_count || 0) + 1;
+          const maxRetries = item.max_retries || 3;
+          const extractionError = extracted.error || 'Extraction returned 0 nodes from non-trivial content';
 
-          results.push({ id: item.id, status: 'completed' });
+          if (retryCount < maxRetries) {
+            // Auto-retry: put back in pending state for next cron cycle
+            console.warn(`[Ingest Process] Zero extraction for "${item.title}" — scheduling retry ${retryCount}/${maxRetries}. Reason: ${extractionError}`);
+            await supabase
+              .from('ingest_queue')
+              .update({
+                status: 'pending',
+                started_at: null,
+                retry_count: retryCount,
+                error_message: `Retry ${retryCount}/${maxRetries}: ${extractionError}`,
+              })
+              .eq('id', item.id);
+
+            // Clean up the empty knowledge_source created in step 2
+            if (source?.id) {
+              await supabase.from('knowledge_sources').delete().eq('id', source.id);
+            }
+
+            results.push({ id: item.id, status: 'retrying', error: extractionError });
+          } else {
+            // Retries exhausted — mark as failed
+            console.error(`[Ingest Process] Zero extraction for "${item.title}" after ${retryCount} attempts. Marking as FAILED. Reason: ${extractionError}`);
+            await supabase
+              .from('ingest_queue')
+              .update({
+                status: 'failed',
+                source_id: source?.id || null,
+                nodes_created: 0,
+                edges_created: 0,
+                error_message: `Extraction failed after ${retryCount} attempts: ${extractionError}`,
+                completed_at: new Date().toISOString(),
+                retry_count: retryCount,
+              })
+              .eq('id', item.id);
+
+            results.push({ id: item.id, status: 'failed', error: extractionError });
+          }
           continue;
         }
 

@@ -6,6 +6,12 @@
   "functions": {
     "api/youtube/process.ts": {
       "maxDuration": 300
+    },
+    "api/ingest/process.ts": {
+      "maxDuration": 300
+    },
+    "api/queue/delete.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
