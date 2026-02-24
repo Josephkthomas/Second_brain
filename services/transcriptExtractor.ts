@@ -237,60 +237,48 @@ async function fetchViaInnertube(videoId: string): Promise<string | null> {
 // TIER 3: Apify
 // ============================================
 
-const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
-
 async function fetchViaApify(
   videoUrl: string,
   apifyApiKey: string
 ): Promise<{ success: boolean; transcript: string | null; language: string | null; is_auto_generated: boolean; error?: string }> {
-  const runResponse = await fetch(
-    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apifyApiKey}`,
-      },
-      body: JSON.stringify({ videoUrl }),
-    }
-  );
+  // Use run-sync-get-dataset-items: runs actor AND returns dataset items in one call.
+  // Auth via token query param (Apify v2 standard). Input: { videoUrl } for pintostudio actor.
+  const APIFY_ACTOR_ID = 'pintostudio~youtube-transcript-scraper';
+  const syncUrl = `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID}/run-sync-get-dataset-items?token=${apifyApiKey}`;
 
-  if (!runResponse.ok) {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify run failed: ${runResponse.status}` };
+  const response = await fetch(syncUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoUrl }),
+  });
+
+  if (!response.ok) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify HTTP ${response.status}` };
   }
 
-  const runData = await runResponse.json();
-  const runId = runData.data?.id;
-  const status = runData.data?.status;
+  const results = await response.json();
 
-  if (status !== 'SUCCEEDED') {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify status: ${status}` };
-  }
-
-  const resultsResponse = await fetch(
-    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
-    { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
-  );
-
-  const results = await resultsResponse.json();
-
-  if (!results || results.length === 0) {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript found' };
+  if (!Array.isArray(results) || results.length === 0) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript in dataset' };
   }
 
   const firstResult = results[0];
-  let transcript: string;
+  let transcript = '';
 
-  if (firstResult.data && Array.isArray(firstResult.data)) {
-    transcript = firstResult.data
-      .map((segment: { text?: string }) => segment.text || '')
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  } else if (firstResult.transcript) {
+  if (typeof firstResult.transcript === 'string' && firstResult.transcript.length > 0) {
     transcript = firstResult.transcript;
-  } else {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'Unexpected format' };
+  } else if (typeof firstResult.text === 'string' && firstResult.text.length > 0) {
+    transcript = firstResult.text;
+  } else if (typeof firstResult.content === 'string' && firstResult.content.length > 0) {
+    transcript = firstResult.content;
+  } else if (firstResult.data && Array.isArray(firstResult.data)) {
+    transcript = firstResult.data
+      .map((seg: any) => seg.text || seg.content || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  } else if (results.length > 1 && results[0].text) {
+    transcript = results
+      .map((seg: any) => seg.text || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
   }
 
   if (!transcript || transcript.length < 50) {
