@@ -206,81 +206,74 @@ async function fetchViaApify(
   videoUrl: string,
   apifyApiKey: string
 ): Promise<{ success: boolean; transcript: string | null; language: string | null; is_auto_generated: boolean; error?: string }> {
-  const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
-  const runResponse = await fetch(
-    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=55`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apifyApiKey}` },
-      body: JSON.stringify({
-        startUrls: [{ url: videoUrl }],
-        includeTimestamps: 'Yes',
-      }),
-    }
-  );
-  if (!runResponse.ok) {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify run failed: ${runResponse.status}` };
-  }
-  const runData = await runResponse.json();
-  const runId = runData.data?.id;
-  const status = runData.data?.status;
-  if (status !== 'SUCCEEDED') {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify status: ${status}` };
-  }
-  const resultsResponse = await fetch(
-    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
-    { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
-  );
-  const results = await resultsResponse.json();
-  console.log(`[Apify] Dataset returned ${Array.isArray(results) ? results.length : 0} items, first item keys: ${results?.[0] ? Object.keys(results[0]).join(', ') : 'none'}`);
+  // Use run-sync-get-dataset-items: runs the actor AND returns dataset items in a single call.
+  // Auth via query param (Apify v2 standard). Input: { videoUrl } for pintostudio actor.
+  const APIFY_ACTOR_ID = 'pintostudio~youtube-transcript-scraper';
+  const syncUrl = `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID}/run-sync-get-dataset-items?token=${apifyApiKey}`;
 
-  if (!results || results.length === 0) {
-    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript found in dataset' };
+  console.log(`[Apify] Calling sync endpoint for: ${videoUrl}`);
+
+  const response = await fetch(syncUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoUrl }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    console.error(`[Apify] HTTP ${response.status}: ${errText.substring(0, 300)}`);
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify HTTP ${response.status}` };
   }
 
-  // The actor can return data in several formats — try all of them
+  const results = await response.json();
+  console.log(`[Apify] Response: ${Array.isArray(results) ? results.length : 0} items, keys: ${results?.[0] ? Object.keys(results[0]).join(', ') : 'none'}`);
+
+  if (!Array.isArray(results) || results.length === 0) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript in dataset' };
+  }
+
+  // Parse transcript from response — the actor can return data in several formats
   let transcript = '';
   const firstResult = results[0];
 
-  // Format 1: Array of { timestamp, text } segments (most common with includeTimestamps)
-  if (Array.isArray(firstResult)) {
-    transcript = firstResult
-      .map((seg: { text?: string }) => seg.text || '')
-      .join(' ').replace(/\s+/g, ' ').trim();
-  }
-  // Format 2: Object with .data array of segments
-  else if (firstResult.data && Array.isArray(firstResult.data)) {
-    transcript = firstResult.data
-      .map((seg: { text?: string }) => seg.text || '')
-      .join(' ').replace(/\s+/g, ' ').trim();
-  }
-  // Format 3: Object with .transcript string
-  else if (typeof firstResult.transcript === 'string') {
+  // Format 1: Object with .transcript string (most common)
+  if (typeof firstResult.transcript === 'string' && firstResult.transcript.length > 0) {
     transcript = firstResult.transcript;
   }
-  // Format 4: Object with .text string
-  else if (typeof firstResult.text === 'string') {
+  // Format 2: Object with .text string
+  else if (typeof firstResult.text === 'string' && firstResult.text.length > 0) {
     transcript = firstResult.text;
   }
-  // Format 5: Object with .content string
-  else if (typeof firstResult.content === 'string') {
+  // Format 3: Object with .content string
+  else if (typeof firstResult.content === 'string' && firstResult.content.length > 0) {
     transcript = firstResult.content;
   }
-  // Format 6: The results array itself contains segments (actor returns flat array of segments)
+  // Format 4: Object with .data array of { text } segments
+  else if (firstResult.data && Array.isArray(firstResult.data)) {
+    transcript = firstResult.data
+      .map((seg: any) => seg.text || seg.content || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  }
+  // Format 5: Array of { text } segments as the first result
+  else if (Array.isArray(firstResult)) {
+    transcript = firstResult
+      .map((seg: any) => seg.text || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  }
+  // Format 6: Results array itself is flat segments with .text fields
   else if (results.length > 1 && results[0].text) {
     transcript = results
-      .map((seg: { text?: string }) => seg.text || '')
+      .map((seg: any) => seg.text || '')
       .join(' ').replace(/\s+/g, ' ').trim();
   }
 
   if (!transcript || transcript.length < 50) {
-    // Log the actual data shape for debugging
     const sample = JSON.stringify(firstResult).substring(0, 500);
-    console.error(`[Apify] Transcript too short (${transcript.length} chars). First result sample: ${sample}`);
+    console.error(`[Apify] Transcript too short (${transcript.length} chars). Sample: ${sample}`);
     return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Transcript too short (${transcript.length} chars)` };
   }
 
-  console.log(`[Apify] Successfully extracted ${transcript.length} chars`);
+  console.log(`[Apify] Success: ${transcript.length} chars`);
   return { success: true, transcript, language: firstResult.language || 'en', is_auto_generated: true };
 }
 
