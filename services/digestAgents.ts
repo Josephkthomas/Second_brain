@@ -17,6 +17,55 @@ const initGenAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// ─── Robust JSON Extraction ─────────────────────────────────
+
+function safeExtractJSON(response: any, label: string): any {
+  // Step 1: Get raw text safely (some SDK versions throw on .text)
+  let rawText = '';
+  try {
+    rawText = response.text || '';
+  } catch {
+    // Fallback: dig into response candidates
+    rawText = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
+
+  if (!rawText.trim()) {
+    console.warn(`[${label}] Empty response from Gemini`);
+    return null;
+  }
+
+  // Step 2: Try direct parse first (happy path with responseMimeType: 'application/json')
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    // continue to fallback strategies
+  }
+
+  // Step 3: Strip markdown code fences (model sometimes wraps JSON in ```json ... ```)
+  const fenceMatch = rawText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (fenceMatch) {
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch {
+      // continue
+    }
+  }
+
+  // Step 4: Find the outermost { ... } in the text
+  const braceStart = rawText.indexOf('{');
+  const braceEnd = rawText.lastIndexOf('}');
+  if (braceStart !== -1 && braceEnd > braceStart) {
+    try {
+      return JSON.parse(rawText.slice(braceStart, braceEnd + 1));
+    } catch {
+      // continue
+    }
+  }
+
+  console.error(`[${label}] Could not parse JSON from response (first 300 chars): ${rawText.slice(0, 300)}`);
+  return null;
+}
+
 // ─── Progress Types ─────────────────────────────────────────
 
 export type AgentPhase = 'init' | 'gathering' | 'sub_agent' | 'meta_agent' | 'saving' | 'complete' | 'error';
@@ -198,7 +247,20 @@ Provide your analysis as structured JSON. The "content" field should be your ful
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = safeExtractJSON(response, `sub-agent:${moduleName}`);
+
+    if (!parsed) {
+      return {
+        module_id: module.id,
+        module_name: moduleName,
+        icon: moduleIcon,
+        template_id: module.template_id,
+        content: 'Analysis could not be generated — the AI returned an unparseable response. Try regenerating the digest.',
+        highlights: [],
+        entities_referenced: [],
+        raw_data: { nodes_count: graphContext.nodes.length, edges_count: graphContext.edges.length },
+      };
+    }
 
     return {
       module_id: module.id,
@@ -206,8 +268,8 @@ Provide your analysis as structured JSON. The "content" field should be your ful
       icon: moduleIcon,
       template_id: module.template_id,
       content: parsed.content || 'No analysis generated.',
-      highlights: parsed.highlights || [],
-      entities_referenced: parsed.entities_referenced || [],
+      highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
+      entities_referenced: Array.isArray(parsed.entities_referenced) ? parsed.entities_referenced : [],
       raw_data: {
         nodes_count: graphContext.nodes.length,
         edges_count: graphContext.edges.length,
@@ -295,11 +357,11 @@ Write a 2-4 sentence executive summary capturing the single most important insig
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = safeExtractJSON(response, 'meta-agent');
 
     return {
-      executive_summary: parsed.executive_summary || 'Digest generated successfully.',
-      suggested_next_steps: parsed.suggested_next_steps || [],
+      executive_summary: parsed?.executive_summary || 'Digest generated successfully.',
+      suggested_next_steps: Array.isArray(parsed?.suggested_next_steps) ? parsed.suggested_next_steps : [],
     };
   } catch (error) {
     console.error('Meta-agent error:', error);
@@ -459,8 +521,11 @@ export async function generateDigest(
     emitProgress('meta_agent', 'Synthesising executive summary...', graphStats);
 
     const recentHistory = await fetchDigestHistory(undefined, 5);
+    // Only pass successful module outputs to the meta-agent — error outputs would confuse synthesis
+    const successfulOutputs = moduleOutputs.filter(o => !o.content.startsWith('Error') && !o.content.startsWith('Analysis could not'));
     const { executive_summary, suggested_next_steps } = await runMetaAgent(
-      moduleOutputs, profile.frequency, profile.density, recentHistory, profile.scope
+      successfulOutputs.length > 0 ? successfulOutputs : moduleOutputs,
+      profile.frequency, profile.density, recentHistory, profile.scope
     );
 
     if (metaIdx >= 0) {
