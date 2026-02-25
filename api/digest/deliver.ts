@@ -24,34 +24,67 @@ function formatDigestEmail(content: any, profileName: string): { subject: string
   const subject = `Synapse ${content.frequency} Brief — ${date}`;
   const font = "'Rajdhani', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
-  // Sections: highlights only (no full agent content)
+  // Helper: convert basic markdown to email-safe HTML
+  const mdToHtml = (md: string): string => {
+    return md
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .split('\n')
+      .map(line => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
+          return `<div style="padding: 3px 0; display: flex;"><span style="color: #22d3ee; margin-right: 8px; flex-shrink: 0;">&#9670;</span><span>${trimmed.slice(2)}</span></div>`;
+        }
+        if (/^\d+\.\s/.test(trimmed)) {
+          return `<div style="padding: 3px 0;">${trimmed}</div>`;
+        }
+        if (trimmed === '') return '<div style="height: 8px;"></div>';
+        return `<div style="padding: 2px 0;">${trimmed}</div>`;
+      })
+      .join('');
+  };
+
+  // Sections: custom modules show full content, template modules show highlights
   const sectionsHtml = (content.sections || [])
     .filter((s: any) => !s.content?.startsWith('Error'))
     .map((section: any, idx: number) => {
-      const highlightsHtml = section.highlights?.length > 0
-        ? section.highlights.map((h: string) => `
+      const isCustom = !section.template_id;
+
+      // Custom modules: show full newsletter-ready content directly
+      // Template modules: show highlights only
+      let bodyHtml: string;
+      if (isCustom && section.content) {
+        bodyHtml = `<div style="color: #cbd5e1; font-family: ${font}; font-size: 13px; line-height: 1.6;">${mdToHtml(section.content)}</div>`;
+      } else if (section.highlights?.length > 0) {
+        bodyHtml = `<table cellpadding="0" cellspacing="0" border="0" width="100%">${section.highlights.map((h: string) => `
           <tr>
             <td style="padding: 5px 0; vertical-align: top; width: 18px;">
               <span style="color: #22d3ee; font-size: 12px;">&#9670;</span>
             </td>
             <td style="padding: 5px 0; color: #cbd5e1; font-family: ${font}; font-size: 13px; line-height: 1.5;">${h}</td>
-          </tr>`).join('')
-        : `<tr><td style="padding: 5px 0; color: #64748b; font-family: ${font}; font-size: 12px; font-style: italic;">No key highlights for this module.</td></tr>`;
+          </tr>`).join('')}</table>`;
+      } else {
+        bodyHtml = `<p style="padding: 5px 0; color: #64748b; font-family: ${font}; font-size: 12px; font-style: italic; margin: 0;">No key highlights for this module.</p>`;
+      }
+
+      const badge = isCustom
+        ? `<span style="margin-left: 8px; padding: 1px 6px; border-radius: 3px; font-family: ${font}; font-size: 9px; color: #a78bfa; background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.2); vertical-align: middle;">CUSTOM</span>`
+        : '';
 
       return `
-    <div style="margin-bottom: 16px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08);">
+    <div style="margin-bottom: 16px; border-radius: 8px; overflow: hidden; border: 1px solid ${isCustom ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.08)'};">
       <div style="padding: 12px 16px; background: #111827; border-bottom: 1px solid rgba(255,255,255,0.06);">
         <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
           <td style="width: 26px; vertical-align: middle;">
-            <div style="width: 20px; height: 20px; border-radius: 5px; background: rgba(34,211,238,0.12); text-align: center; line-height: 20px; font-family: ${font}; font-size: 11px; color: #22d3ee; font-weight: 700;">${idx + 1}</div>
+            <div style="width: 20px; height: 20px; border-radius: 5px; background: ${isCustom ? 'rgba(167,139,250,0.12)' : 'rgba(34,211,238,0.12)'}; text-align: center; line-height: 20px; font-family: ${font}; font-size: 11px; color: ${isCustom ? '#a78bfa' : '#22d3ee'}; font-weight: 700;">${idx + 1}</div>
           </td>
           <td style="vertical-align: middle;">
-            <span style="color: #f1f5f9; font-family: ${font}; font-size: 14px; font-weight: 600;">${section.module_name}</span>
+            <span style="color: #f1f5f9; font-family: ${font}; font-size: 14px; font-weight: 600;">${section.module_name}</span>${badge}
           </td>
         </tr></table>
       </div>
       <div style="padding: 12px 16px; background: #0a0f1a;">
-        <table cellpadding="0" cellspacing="0" border="0" width="100%">${highlightsHtml}</table>
+        ${bodyHtml}
       </div>
     </div>`;
     }).join('');

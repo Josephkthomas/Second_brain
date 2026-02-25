@@ -372,60 +372,35 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
         const moduleKey = section.module_id || `section-${idx}`;
         const isExpanded = expandedModules.has(moduleKey);
         const hasHighlights = section.highlights?.length > 0;
+        const isCustom = !(section as any).template_id;
 
         return (
-          <div key={moduleKey} className="border border-white/10 rounded-lg overflow-hidden">
+          <div key={moduleKey} className={clsx("border rounded-lg overflow-hidden", isCustom ? "border-violet-500/15" : "border-white/10")}>
             {/* Module Header */}
             <div className="flex items-center gap-2.5 p-4 bg-white/[0.02] border-b border-white/5">
-              <Icon size={16} className="text-slate-400" />
+              <Icon size={16} className={isCustom ? "text-violet-400" : "text-slate-400"} />
               <h3 className="text-sm font-semibold text-white flex-1">{section.module_name}</h3>
-              {hasHighlights && (
+              {isCustom && (
+                <span className="text-[9px] font-bold text-violet-400 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                  Custom
+                </span>
+              )}
+              {!isCustom && hasHighlights && (
                 <span className="text-[10px] text-slate-600 bg-white/5 px-1.5 py-0.5 rounded">
                   {section.highlights.length} highlights
                 </span>
               )}
             </div>
 
-            {/* Rolled-Up View: Highlights Only (What the email would show) */}
             <div className="p-4">
-              {hasHighlights ? (
-                <div className="space-y-2">
-                  {section.highlights.map((h, i) => (
-                    <div key={i} className="flex items-start gap-2.5 text-xs">
-                      <span className="text-cyan-500 mt-0.5 shrink-0">&#9670;</span>
-                      <span className="text-slate-300 leading-relaxed">{h}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-slate-500 italic">No key highlights for this module.</p>
-              )}
-
-              {/* Expand/Collapse for Full Agent Output */}
-              <button
-                onClick={() => toggleModule(moduleKey)}
-                className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-cyan-400 transition-colors group"
-              >
-                <FileText size={12} className="group-hover:text-cyan-400" />
-                <span>{isExpanded ? 'Hide' : 'View'} full agent analysis</span>
-                {isExpanded
-                  ? <ChevronUp size={12} />
-                  : <ChevronDown size={12} />
-                }
-              </button>
-
-              {/* Full Agent Output (Expanded) */}
-              {isExpanded && (
-                <div className="mt-3 pt-3 border-t border-white/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Eye size={10} className="text-slate-600" />
-                    <span className="text-[10px] font-medium text-slate-600 uppercase tracking-wider">Full Agent Output</span>
-                  </div>
-                  <div className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap bg-black/20 rounded-lg p-3 border border-white/5 max-h-[400px] overflow-y-auto">
+              {isCustom ? (
+                /* Custom modules: show full content directly (newsletter-ready) */
+                <>
+                  <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
                     {section.content}
                   </div>
                   {section.entities_referenced?.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
+                    <div className="mt-3 flex flex-wrap gap-1">
                       <span className="text-[10px] text-slate-600 mr-1">Referenced:</span>
                       {section.entities_referenced.map((e, i) => (
                         <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-slate-500 font-mono">
@@ -434,7 +409,59 @@ export const DigestViewer: React.FC<Props> = ({ entry, channels }) => {
                       ))}
                     </div>
                   )}
-                </div>
+                </>
+              ) : (
+                /* Template modules: highlights + expandable full analysis */
+                <>
+                  {hasHighlights ? (
+                    <div className="space-y-2">
+                      {section.highlights.map((h, i) => (
+                        <div key={i} className="flex items-start gap-2.5 text-xs">
+                          <span className="text-cyan-500 mt-0.5 shrink-0">&#9670;</span>
+                          <span className="text-slate-300 leading-relaxed">{h}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">No key highlights for this module.</p>
+                  )}
+
+                  {/* Expand/Collapse for Full Agent Output */}
+                  <button
+                    onClick={() => toggleModule(moduleKey)}
+                    className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-cyan-400 transition-colors group"
+                  >
+                    <FileText size={12} className="group-hover:text-cyan-400" />
+                    <span>{isExpanded ? 'Hide' : 'View'} full agent analysis</span>
+                    {isExpanded
+                      ? <ChevronUp size={12} />
+                      : <ChevronDown size={12} />
+                    }
+                  </button>
+
+                  {/* Full Agent Output (Expanded) */}
+                  {isExpanded && (
+                    <div className="mt-3 pt-3 border-t border-white/5">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Eye size={10} className="text-slate-600" />
+                        <span className="text-[10px] font-medium text-slate-600 uppercase tracking-wider">Full Agent Output</span>
+                      </div>
+                      <div className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap bg-black/20 rounded-lg p-3 border border-white/5 max-h-[400px] overflow-y-auto">
+                        {section.content}
+                      </div>
+                      {section.entities_referenced?.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <span className="text-[10px] text-slate-600 mr-1">Referenced:</span>
+                          {section.entities_referenced.map((e, i) => (
+                            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-slate-500 font-mono">
+                              {e.slice(0, 8)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

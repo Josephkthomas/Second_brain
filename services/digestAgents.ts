@@ -118,9 +118,19 @@ async function executeSubAgent(
 ): Promise<DigestModuleOutput> {
   const ai = initGenAI();
 
+  const isCustomModule = !template;
   let systemPrompt = template?.systemPrompt || module.custom_system_prompt || 'Analyse the provided knowledge graph data and produce a useful summary.';
   if (module.user_context) {
     systemPrompt += `\n\nAdditional user instructions: ${module.user_context}`;
+  }
+  if (isCustomModule) {
+    systemPrompt += `\n\nIMPORTANT OUTPUT FORMAT: Your "content" output will be displayed DIRECTLY in a newsletter email and digest UI — it will NOT be further summarised. Therefore:
+- Follow the user's instructions exactly for what information to include
+- Keep the output concise and scannable (200-400 words max)
+- Use short paragraphs and bullet points for data
+- Do NOT use large headers or section titles (the module name is already shown as a header)
+- Think of this as writing a section of a newsletter, not a full report
+- Include specific numbers, names, and facts — avoid vague generalisations`;
   }
 
   const moduleName = template?.name || module.custom_name || 'Custom Module';
@@ -477,6 +487,7 @@ export async function generateDigest(
         module_id: o.module_id,
         module_name: o.module_name,
         icon: o.icon,
+        template_id: o.template_id,
         content: o.content,
         highlights: o.highlights,
         entities_referenced: o.entities_referenced,

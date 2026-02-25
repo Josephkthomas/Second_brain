@@ -90,6 +90,7 @@ export interface DigestSection {
   module_id: string;
   module_name: string;
   icon: string;
+  template_id: string | null; // null = custom module
   content: string; // Markdown
   highlights: string[];
   entities_referenced: string[];
