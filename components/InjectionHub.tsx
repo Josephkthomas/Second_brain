@@ -17,7 +17,6 @@ import { getAllExtractionModes } from '../config/extractionModes';
 import type { ExtractionMode, AnchorEmphasis, ExtractionSessionConfig } from '../types/extraction';
 import type { AnchorNode } from '../types';
 import clsx from 'clsx';
-import YouTubeManager from './youtube/YouTubeManager';
 import IngestQueuePanel from './IngestQueuePanel';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -31,7 +30,7 @@ type SourceType = 'Meeting' | 'YouTube' | 'Note' | 'Anchor' | 'Research' | 'Docu
 type ReviewTab = 'entities' | 'relationships';
 type ResearchFocus = 'web' | 'academic' | 'video' | 'social';
 type ResearchDepth = 'fast' | 'deep';
-type HubMode = 'research' | 'input' | 'youtube' | 'queue';
+type HubMode = 'research' | 'input';
 
 // Add helper to detect icon from URI
 const getSourceTypeIcon = (uri?: string) => {
@@ -47,7 +46,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
   const { session } = useAuth();
   const [step, setStep] = useState<Step>('input');
   const [hubMode, setHubMode] = useState<HubMode>('research');
-  const [queuePendingCount, setQueuePendingCount] = useState(0);
   
   // Input State
   const [sourceType, setSourceType] = useState<SourceType>('Research');
@@ -145,28 +143,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
     generateSuggestions();
   }, []);
 
-  // Queue badge: poll pending count for the tab badge
-  const fetchQueuePendingCount = useCallback(async () => {
-    if (!session?.access_token || hubMode === 'queue') return;
-    try {
-      const res = await fetch('/api/ingest?status=pending&limit=200', {
-        headers: { 'Authorization': `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const active = (data.items || []).filter((i: any) =>
-          ['pending', 'extracting', 'cross_connecting', 'embedding'].includes(i.status)
-        ).length;
-        setQueuePendingCount(active);
-      }
-    } catch { /* silent */ }
-  }, [session?.access_token, hubMode]);
-
-  useEffect(() => {
-    fetchQueuePendingCount();
-    const interval = setInterval(fetchQueuePendingCount, 15000);
-    return () => clearInterval(interval);
-  }, [fetchQueuePendingCount]);
 
   const loadDefaultExtractionSettings = async () => {
     try {
@@ -1015,8 +991,7 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
           </p>
         </div>
 
-        {/* PROGRESS BAR - Hidden for YouTube mode */}
-        {hubMode !== 'youtube' && hubMode !== 'queue' && (
+        {/* PROGRESS BAR */}
         <div className="flex items-center justify-between mb-8 relative px-10">
           <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-10"></div>
 
@@ -1036,11 +1011,11 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                const currentStepIndex = visibleSteps.indexOf(effectiveCurrentStep);
                const isCurrent = effectiveCurrentStep === s;
                const isCompleted = currentStepIndex > idx;
-               
+
                return (
                  <div key={s} className={clsx("flex flex-col items-center gap-2 bg-slate-950 px-2", isCurrent ? "text-cyan-400" : (isCompleted ? "text-emerald-500" : "text-slate-600"))}>
-                   <div className={clsx("w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all", 
-                      isCurrent ? "border-cyan-400 bg-cyan-900/20 shadow-[0_0_10px_rgba(34,211,238,0.3)]" : 
+                   <div className={clsx("w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all",
+                      isCurrent ? "border-cyan-400 bg-cyan-900/20 shadow-[0_0_10px_rgba(34,211,238,0.3)]" :
                       (isCompleted ? "border-emerald-500 bg-emerald-900/20" : "border-slate-700 bg-slate-900")
                    )}>
                      {isCompleted ? <CheckCircle2 size={16} /> : <span className="text-xs font-mono">{idx + 1}</span>}
@@ -1051,7 +1026,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
             });
           })()}
         </div>
-        )}
 
         {step === 'input' && (
            <div className="animate-in fade-in slide-in-from-bottom-4">
@@ -1062,17 +1036,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                     </button>
                     <button onClick={() => setHubMode('input')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'input' ? "bg-indigo-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
                         <UploadCloud size={16} /> Standard Input
-                    </button>
-                    <button onClick={() => setHubMode('youtube')} className={clsx("flex items-center gap-2 px-6 py-2 rounded-full text-sm font-bold transition-all", hubMode === 'youtube' ? "bg-red-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
-                        <Youtube size={16} /> YouTube Channels
-                    </button>
-                    <button onClick={() => setHubMode('queue')} className={clsx("flex items-center gap-2 px-5 py-2 rounded-full text-sm font-bold transition-all relative", hubMode === 'queue' ? "bg-emerald-600 text-white shadow-md" : "text-slate-400 hover:text-slate-200")}>
-                        <ListTodo size={16} /> Queue
-                        {queuePendingCount > 0 && hubMode !== 'queue' && (
-                          <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center bg-amber-500 text-white text-[10px] font-bold rounded-full px-1 shadow-lg animate-pulse">
-                            {queuePendingCount}
-                          </span>
-                        )}
                     </button>
                 </div>
              </div>
@@ -1423,31 +1386,6 @@ export const InjectionHub: React.FC<InjectionHubProps> = ({ onComplete, onGraphU
                 </div>
              )}
 
-             {hubMode === 'youtube' && (
-                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
-                    <YouTubeManager onComplete={onComplete} onGraphUpdate={onGraphUpdate} />
-                </div>
-             )}
-
-             {hubMode === 'queue' && (
-                <div className="animate-in fade-in h-[calc(100vh-300px)] min-h-[500px]">
-                    <div className="h-full flex flex-col">
-                        <div className="flex items-center justify-between mb-4 px-1">
-                            <div className="flex items-center gap-2">
-                                <ListTodo className="w-5 h-5 text-emerald-400" />
-                                <h2 className="text-lg font-bold text-slate-200">Processing Queue</h2>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-slate-500">
-                                <Clock size={12} />
-                                <span>Auto-processes every 5 minutes</span>
-                            </div>
-                        </div>
-                        <div className="flex-1 min-h-0">
-                            <IngestQueuePanel onGraphUpdate={onGraphUpdate} />
-                        </div>
-                    </div>
-                </div>
-             )}
            </div>
         )}
 

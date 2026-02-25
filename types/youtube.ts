@@ -57,6 +57,7 @@ export interface YouTubeQueueItem {
   id: string;
   user_id: string;
   channel_id: string;            // References youtube_channels.id
+  playlist_source_id: string | null; // References youtube_playlists.id
   video_id: string;              // YouTube video ID
   video_title: string | null;
   video_url: string;
@@ -77,10 +78,15 @@ export interface YouTubeQueueItem {
   error_message: string | null;
   retry_count: number;
   max_retries: number;
+  // Live processing status
+  processing_step: string | null;
   // Timestamps
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Joined fields (present when fetched with select join)
+  youtube_channels?: { channel_name: string } | null;
+  youtube_playlists?: { playlist_name: string } | null;
 }
 
 /**
@@ -263,6 +269,7 @@ export interface QueueItemWithChannel extends YouTubeQueueItem {
  */
 export const DEFAULT_YOUTUBE_SETTINGS: Omit<YouTubeSettings, 'id' | 'user_id' | 'created_at' | 'updated_at'> = {
   apify_api_key: null,
+  youtube_api_key: null,
   default_auto_ingest: true,
   default_extraction_mode: 'comprehensive',
   default_anchor_emphasis: 'standard',
@@ -296,3 +303,61 @@ export const QUEUE_PRIORITY = {
   LOW: 7,
   LOWEST: 10,
 } as const;
+
+// ============================================
+// PLAYLIST TYPES
+// ============================================
+
+export type PlaylistConnectionStatus = 'pending' | 'verified' | 'error' | 'disconnected';
+
+export interface YouTubePlaylist {
+  id: string;
+  user_id: string;
+  playlist_id: string;
+  playlist_url: string;
+  playlist_name: string | null;
+  synapse_code: string;
+  thumbnail_url: string | null;
+  auto_process: boolean;
+  extraction_mode: ExtractionMode;
+  anchor_emphasis: AnchorEmphasis;
+  linked_anchor_ids: string[];
+  custom_instructions: string | null;
+  last_polled_at: string | null;
+  last_new_video_at: string | null;
+  known_video_count: number;
+  total_videos_ingested: number;
+  is_active: boolean;
+  connection_status: PlaylistConnectionStatus;
+  connection_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AddPlaylistFormData {
+  playlist_url: string;
+  auto_process?: boolean;
+  extraction_mode?: ExtractionMode;
+  anchor_emphasis?: AnchorEmphasis;
+  linked_anchor_ids?: string[];
+  custom_instructions?: string;
+}
+
+export interface UpdatePlaylistFormData {
+  auto_process?: boolean;
+  extraction_mode?: ExtractionMode;
+  anchor_emphasis?: AnchorEmphasis;
+  linked_anchor_ids?: string[];
+  custom_instructions?: string;
+  is_active?: boolean;
+}
+
+export interface TieredTranscriptResult {
+  success: boolean;
+  transcript: string | null;
+  language: string | null;
+  method: 'caption_extractor' | 'innertube' | 'apify' | 'manual';
+  is_auto_generated: boolean;
+  error?: string;
+  duration_ms: number;
+}

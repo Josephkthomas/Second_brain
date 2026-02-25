@@ -6,10 +6,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI, Type } from '@google/genai';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const APIFY_API_KEY = process.env.APIFY_API_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const APIFY_API_KEY = process.env.APIFY_API_KEY || '';
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -64,10 +64,17 @@ async function generateChunkEmbedding(text: string): Promise<number[]> {
   }
 }
 
-// Max items to process per batch (Vercel has 10-60s timeout on free tier)
-const MAX_ITEMS_PER_BATCH = 2;
-// Max items to process when user clicks "Process Now" (process_all mode)
-const MAX_ITEMS_PROCESS_ALL = 20;
+// Vercel serverless function config — extend timeout to 300s (Pro) or 60s (Hobby)
+export const config = { maxDuration: 300 };
+
+// Max items to process per batch — keep LOW to avoid Vercel timeout
+// Each video takes 30-120s (transcript + Gemini + embeddings + cross-ref)
+const MAX_ITEMS_PER_BATCH = 1;
+// User-triggered: process 1 item per request, UI loops for remaining
+const MAX_ITEMS_PROCESS_ALL = 1;
+
+// Items stuck in processing states for longer than this are reset to failed
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 // Verify cron authorization
 function verifyCronAuth(req: VercelRequest): boolean {
@@ -112,93 +119,237 @@ async function verifyUserAuth(req: VercelRequest): Promise<{ user: { id: string 
   return { user: { id: user.id }, isCron: false };
 }
 
-// Apify transcript extraction
-// Using pintostudio/youtube-transcript-scraper which returns timestamped segments
-const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
+// ── Inlined Transcript Extraction ────────────────────────────────
+// Inlined to avoid cross-directory import bundling issues on Vercel serverless.
+// Tiered extraction: youtube-caption-extractor → Innertube API → Apify → fail
 
-async function fetchTranscript(videoUrl: string, apifyApiKey: string): Promise<{
+interface TieredTranscriptResult {
   success: boolean;
   transcript: string | null;
   language: string | null;
+  method: 'caption_extractor' | 'innertube' | 'apify' | 'manual';
+  is_auto_generated: boolean;
   error?: string;
-}> {
-  try {
-    // Start Actor run with waitForFinish to simplify the flow
-    const runResponse = await fetch(
-      `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=120`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apifyApiKey}`,
-        },
-        body: JSON.stringify({ videoUrl }),
-      }
-    );
+  duration_ms: number;
+}
 
-    if (!runResponse.ok) {
-      const errorBody = await runResponse.text();
-      console.error('[Process] Apify run failed:', runResponse.status, errorBody);
-      return { success: false, transcript: null, language: null, error: `Apify run failed: ${runResponse.status}` };
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise
+      .then((result) => { clearTimeout(timer); resolve(result); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+async function tier1CaptionExtractor(videoId: string): Promise<string | null> {
+  const { getSubtitles } = await import('youtube-caption-extractor');
+  const subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
+  if (!subtitles || subtitles.length === 0) return null;
+  const transcript = subtitles
+    .map((s: { text: string }) => s.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return transcript.length > 50 ? transcript : null;
+}
+
+async function fetchViaInnertube(videoId: string): Promise<string | null> {
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const pageResponse = await fetch(videoUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  const html = await pageResponse.text();
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+  if (!apiKeyMatch) return null;
+  const apiKey = apiKeyMatch[1];
+
+  const playerResponse = await fetch(
+    `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: { client: { clientName: 'ANDROID', clientVersion: '17.31.35', hl: 'en' } },
+        videoId,
+      }),
     }
+  );
+  const playerData = await playerResponse.json();
+  const captionTracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!captionTracks || captionTracks.length === 0) return null;
 
-    const runData = await runResponse.json();
-    const runId = runData.data?.id;
-    const status = runData.data?.status;
+  const track = captionTracks.find((t: any) => t.languageCode === 'en') || captionTracks[0];
+  if (!track?.baseUrl) return null;
 
-    if (status !== 'SUCCEEDED') {
-      return { success: false, transcript: null, language: null, error: `Transcript extraction failed: ${status}` };
-    }
+  const captionResponse = await fetch(track.baseUrl);
+  const captionXml = await captionResponse.text();
 
-    // Fetch results from dataset
-    const resultsResponse = await fetch(
-      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
-      { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
-    );
-
-    const results = await resultsResponse.json();
-
-    if (!results || results.length === 0) {
-      return { success: false, transcript: null, language: null, error: 'No transcript found' };
-    }
-
-    // The pintostudio actor returns { data: [{start, dur, text}, ...] }
-    // Concatenate all text segments into a single transcript
-    const firstResult = results[0];
-    let transcript: string;
-
-    if (firstResult.data && Array.isArray(firstResult.data)) {
-      // Format: [{start, dur, text}, ...]
-      transcript = firstResult.data
-        .map((segment: { text?: string }) => segment.text || '')
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    } else if (firstResult.transcript) {
-      // Some actors return transcript directly
-      transcript = firstResult.transcript;
-    } else {
-      return { success: false, transcript: null, language: null, error: 'Unexpected transcript format' };
-    }
-
-    if (!transcript || transcript.length < 50) {
-      return { success: false, transcript: null, language: null, error: 'Transcript too short or empty' };
-    }
-
-    return {
-      success: true,
-      transcript,
-      language: firstResult.language || 'en',
-    };
-  } catch (error) {
-    console.error('[Process] Transcript fetch error:', error);
-    return {
-      success: false,
-      transcript: null,
-      language: null,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+  const textSegments: string[] = [];
+  const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
+  let match;
+  while ((match = textRegex.exec(captionXml)) !== null) {
+    let text = match[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/<[^>]+>/g, '')
+      .trim();
+    if (text) textSegments.push(text);
   }
+  return textSegments.join(' ').replace(/\s+/g, ' ').trim() || null;
+}
+
+async function fetchViaApify(
+  videoUrl: string,
+  apifyApiKey: string
+): Promise<{ success: boolean; transcript: string | null; language: string | null; is_auto_generated: boolean; error?: string }> {
+  const APIFY_ACTOR_ID = 'pintostudio/youtube-transcript-scraper';
+  const runResponse = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID.replace('/', '~')}/runs?waitForFinish=55`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apifyApiKey}` },
+      body: JSON.stringify({
+        startUrls: [{ url: videoUrl }],
+        includeTimestamps: 'Yes',
+      }),
+    }
+  );
+  if (!runResponse.ok) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify run failed: ${runResponse.status}` };
+  }
+  const runData = await runResponse.json();
+  const runId = runData.data?.id;
+  const status = runData.data?.status;
+  if (status !== 'SUCCEEDED') {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Apify status: ${status}` };
+  }
+  const resultsResponse = await fetch(
+    `https://api.apify.com/v2/actor-runs/${runId}/dataset/items`,
+    { headers: { 'Authorization': `Bearer ${apifyApiKey}` } }
+  );
+  const results = await resultsResponse.json();
+  console.log(`[Apify] Dataset returned ${Array.isArray(results) ? results.length : 0} items, first item keys: ${results?.[0] ? Object.keys(results[0]).join(', ') : 'none'}`);
+
+  if (!results || results.length === 0) {
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: 'No transcript found in dataset' };
+  }
+
+  // The actor can return data in several formats — try all of them
+  let transcript = '';
+  const firstResult = results[0];
+
+  // Format 1: Array of { timestamp, text } segments (most common with includeTimestamps)
+  if (Array.isArray(firstResult)) {
+    transcript = firstResult
+      .map((seg: { text?: string }) => seg.text || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  }
+  // Format 2: Object with .data array of segments
+  else if (firstResult.data && Array.isArray(firstResult.data)) {
+    transcript = firstResult.data
+      .map((seg: { text?: string }) => seg.text || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  }
+  // Format 3: Object with .transcript string
+  else if (typeof firstResult.transcript === 'string') {
+    transcript = firstResult.transcript;
+  }
+  // Format 4: Object with .text string
+  else if (typeof firstResult.text === 'string') {
+    transcript = firstResult.text;
+  }
+  // Format 5: Object with .content string
+  else if (typeof firstResult.content === 'string') {
+    transcript = firstResult.content;
+  }
+  // Format 6: The results array itself contains segments (actor returns flat array of segments)
+  else if (results.length > 1 && results[0].text) {
+    transcript = results
+      .map((seg: { text?: string }) => seg.text || '')
+      .join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  if (!transcript || transcript.length < 50) {
+    // Log the actual data shape for debugging
+    const sample = JSON.stringify(firstResult).substring(0, 500);
+    console.error(`[Apify] Transcript too short (${transcript.length} chars). First result sample: ${sample}`);
+    return { success: false, transcript: null, language: null, is_auto_generated: false, error: `Transcript too short (${transcript.length} chars)` };
+  }
+
+  console.log(`[Apify] Successfully extracted ${transcript.length} chars`);
+  return { success: true, transcript, language: firstResult.language || 'en', is_auto_generated: true };
+}
+
+async function extractTranscript(
+  videoId: string,
+  videoUrl: string,
+  apifyApiKey?: string
+): Promise<TieredTranscriptResult> {
+  const overallStart = Date.now();
+  const errors: string[] = [];
+
+  // Tier 1: youtube-caption-extractor
+  try {
+    console.log(`[Transcript] Tier 1: caption-extractor for ${videoId} (+${Date.now() - overallStart}ms)`);
+    // Short timeout — YouTube blocks cloud/datacenter IPs, so this usually fails on Vercel
+    const result = await withTimeout(tier1CaptionExtractor(videoId), 5000, 'Tier 1 timed out');
+    if (result && result.length > 50) {
+      console.log(`[Transcript] Tier 1 SUCCESS: ${result.length} chars`);
+      return { success: true, transcript: result, language: 'en', method: 'caption_extractor', is_auto_generated: true, duration_ms: Date.now() - overallStart };
+    }
+    errors.push('Tier 1: Empty or too short');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Tier 1: ${msg}`);
+    console.warn(`[Transcript] Tier 1 failed: ${msg}`);
+  }
+
+  // Tier 2: Innertube API
+  try {
+    console.log(`[Transcript] Tier 2: Innertube for ${videoId} (+${Date.now() - overallStart}ms)`);
+    // Short timeout — YouTube blocks cloud/datacenter IPs, so this usually fails on Vercel
+    const result = await withTimeout(fetchViaInnertube(videoId), 5000, 'Tier 2 timed out');
+    if (result && result.length > 50) {
+      console.log(`[Transcript] Tier 2 SUCCESS: ${result.length} chars`);
+      return { success: true, transcript: result, language: 'en', method: 'innertube', is_auto_generated: true, duration_ms: Date.now() - overallStart };
+    }
+    errors.push('Tier 2: Empty or too short');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Tier 2: ${msg}`);
+    console.warn(`[Transcript] Tier 2 failed: ${msg}`);
+  }
+
+  // Tier 3: Apify
+  if (apifyApiKey) {
+    try {
+      console.log(`[Transcript] Tier 3: Apify for ${videoId} (+${Date.now() - overallStart}ms)`);
+      const result = await withTimeout(fetchViaApify(videoUrl, apifyApiKey), 60000, 'Tier 3 timed out');
+      if (result.success && result.transcript && result.transcript.length > 50) {
+        console.log(`[Transcript] Tier 3 SUCCESS: ${result.transcript.length} chars`);
+        return { success: true, transcript: result.transcript, language: result.language || 'en', method: 'apify', is_auto_generated: result.is_auto_generated, duration_ms: Date.now() - overallStart };
+      }
+      errors.push(`Tier 3: ${result.error || 'Empty transcript'}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Tier 3: ${msg}`);
+      console.warn(`[Transcript] Tier 3 failed: ${msg}`);
+    }
+  } else {
+    errors.push('Tier 3: Apify API key not configured');
+  }
+
+  // All tiers failed
+  console.error(`[Transcript] All tiers failed for ${videoId}:`, errors);
+  return {
+    success: false, transcript: null, language: null, method: 'manual', is_auto_generated: false,
+    error: `All transcript extraction methods failed: ${errors.join('; ')}`,
+    duration_ms: Date.now() - overallStart,
+  };
 }
 
 // Extraction schema - comprehensive for knowledge graph
@@ -549,10 +700,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     console.log(`[Process] Starting queue processing (${isCron ? 'cron' : 'user: ' + user?.id}, process_all: ${process_all})...`);
 
-    // Build query for pending items with channel info
+    // ── Stuck item recovery ──────────────────────────────
+    // Reset items stuck in fetching_transcript or extracting for > 10 minutes
+    // Also catches items with NULL started_at (stuck from before this field existed)
+    const stuckCutoff = new Date(Date.now() - STUCK_THRESHOLD_MS).toISOString();
+
+    // Phase 1: Items with started_at older than 10 minutes
+    {
+      let stuckUpdate = supabase
+        .from('youtube_ingestion_queue')
+        .update({
+          status: 'failed',
+          error_message: 'Processing timed out (stuck for >10 minutes). Click retry to try again.',
+          processing_step: null,
+          completed_at: new Date().toISOString(),
+        })
+        .in('status', ['fetching_transcript', 'extracting'])
+        .lt('started_at', stuckCutoff);
+
+      if (!isCron && user?.id) {
+        stuckUpdate = stuckUpdate.eq('user_id', user.id);
+      }
+
+      const { error: stuckError } = await stuckUpdate;
+      if (stuckError) {
+        console.warn('[Process] Failed to reset stuck items (with started_at):', stuckError.message);
+      }
+    }
+
+    // Phase 2: Items with NULL started_at stuck in processing states
+    {
+      let stuckNullUpdate = supabase
+        .from('youtube_ingestion_queue')
+        .update({
+          status: 'failed',
+          error_message: 'Processing was interrupted (no start time recorded). Click retry to try again.',
+          processing_step: null,
+          completed_at: new Date().toISOString(),
+        })
+        .in('status', ['fetching_transcript', 'extracting'])
+        .is('started_at', null);
+
+      if (!isCron && user?.id) {
+        stuckNullUpdate = stuckNullUpdate.eq('user_id', user.id);
+      }
+
+      const { error: stuckNullError } = await stuckNullUpdate;
+      if (stuckNullError) {
+        console.warn('[Process] Failed to reset stuck items (null started_at):', stuckNullError.message);
+      }
+    }
+
+    console.log('[Process] Stuck item recovery complete');
+
+    // Build query for pending items with channel AND playlist info
     let query = supabase
       .from('youtube_ingestion_queue')
-      .select('*, youtube_channels(channel_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions)')
+      .select('*, youtube_channels(channel_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions), youtube_playlists(playlist_name, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions)')
       .eq('status', 'pending')
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })
@@ -569,10 +773,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (fetchError) throw fetchError;
 
     if (!queueItems || queueItems.length === 0) {
-      console.log('[Process] No pending items');
+      // Diagnostic: check what items actually exist for this user
+      let diagnostics: any = { reason: 'no_pending_items' };
+      if (user?.id && user.id !== 'cron') {
+        const { data: allItems, error: diagError } = await supabase
+          .from('youtube_ingestion_queue')
+          .select('id, status')
+          .eq('user_id', user.id);
+
+        if (!diagError && allItems) {
+          const counts: Record<string, number> = {};
+          for (const item of allItems) {
+            counts[item.status] = (counts[item.status] || 0) + 1;
+          }
+          diagnostics.user_id = user.id;
+          diagnostics.status_counts = counts;
+          diagnostics.total_items = allItems.length;
+        }
+      }
+
+      console.log('[Process] No pending items. Diagnostics:', JSON.stringify(diagnostics));
       return res.status(200).json({
         success: true,
         processed: 0,
+        remaining: 0,
+        diagnostics,
         duration_ms: Date.now() - startTime,
       });
     }
@@ -590,36 +815,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Mark as processing
         await supabase
           .from('youtube_ingestion_queue')
-          .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
+          .update({
+            status: 'fetching_transcript',
+            processing_step: 'Fetching transcript...',
+            started_at: new Date().toISOString(),
+          })
           .eq('id', item.id);
 
-        // Fetch transcript using global Apify API key
-        const transcriptResult = await fetchTranscript(item.video_url, APIFY_API_KEY);
+        // Fetch transcript using tiered extraction (free methods first, Apify as fallback)
+        const videoId = item.video_id || item.video_url.match(/[?&]v=([^&]+)/)?.[1] || '';
+        const transcriptResult = await extractTranscript(videoId, item.video_url, APIFY_API_KEY);
 
         if (!transcriptResult.success || !transcriptResult.transcript) {
           throw new Error(transcriptResult.error || 'Failed to fetch transcript');
         }
 
-        console.log(`[Process] Transcript fetched (${transcriptResult.transcript.length} chars)`);
+        console.log(`[Process] Transcript fetched via ${transcriptResult.method} (${transcriptResult.transcript.length} chars in ${transcriptResult.duration_ms}ms)`);
 
         // Update status to extracting
+        const transcriptLen = (transcriptResult.transcript.length / 1000).toFixed(1);
         await supabase
           .from('youtube_ingestion_queue')
           .update({
             status: 'extracting',
+            processing_step: `Transcript fetched (${transcriptLen}k chars). Extracting knowledge...`,
             transcript: transcriptResult.transcript.substring(0, 50000), // Store truncated
             transcript_language: transcriptResult.language,
             transcript_fetched_at: new Date().toISOString(),
           })
           .eq('id', item.id);
 
-        // Get channel settings
-        const channelName = item.youtube_channels?.channel_name || 'Unknown Channel';
+        // Check if item was force-cancelled while we were fetching transcript
+        const { data: cancelCheck } = await supabase
+          .from('youtube_ingestion_queue')
+          .select('status')
+          .eq('id', item.id)
+          .single();
+        if (cancelCheck?.status === 'failed') {
+          console.log(`[Process] Item ${item.id} was force-cancelled, skipping extraction`);
+          results.push({ queue_item_id: item.id, status: 'failed', nodes_created: 0, edges_created: 0, error: 'Force cancelled by user' });
+          continue;
+        }
+
+        // Get extraction settings — prefer playlist settings for playlist-sourced items, fall back to channel
+        const playlistSettings = item.youtube_playlists;
+        const channelInfo = item.youtube_channels;
+        const channelName = playlistSettings?.playlist_name || channelInfo?.channel_name || 'Unknown Source';
         const channelSettings = {
-          extraction_mode: item.youtube_channels?.extraction_mode || 'comprehensive',
-          anchor_emphasis: item.youtube_channels?.anchor_emphasis || 'standard',
-          linked_anchor_ids: item.youtube_channels?.linked_anchor_ids || [],
-          custom_instructions: item.youtube_channels?.custom_instructions,
+          extraction_mode: playlistSettings?.extraction_mode || channelInfo?.extraction_mode || 'comprehensive',
+          anchor_emphasis: playlistSettings?.anchor_emphasis || channelInfo?.anchor_emphasis || 'standard',
+          linked_anchor_ids: playlistSettings?.linked_anchor_ids || channelInfo?.linked_anchor_ids || [],
+          custom_instructions: playlistSettings?.custom_instructions || channelInfo?.custom_instructions,
         };
 
         // Fetch linked anchors if any are configured
@@ -644,6 +890,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         );
 
         console.log(`[Process] Extracted ${extracted.nodes.length} nodes, ${extracted.edges.length} internal edges`);
+
+        // Update processing step
+        await supabase
+          .from('youtube_ingestion_queue')
+          .update({
+            processing_step: `Extracted ${extracted.nodes.length} nodes, ${extracted.edges.length} edges. Saving to graph...`,
+          })
+          .eq('id', item.id);
 
         // Save knowledge source
         const { data: source, error: sourceError } = await supabase
@@ -771,6 +1025,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (nodesCreated > 0) {
           console.log('[Process] Starting cross-reference with existing knowledge...');
 
+          await supabase
+            .from('youtube_ingestion_queue')
+            .update({
+              processing_step: `Cross-referencing ${nodesCreated} nodes with existing knowledge graph...`,
+            })
+            .eq('id', item.id);
+
           // Fetch existing nodes for cross-referencing (recent, non-source nodes)
           const { data: existingNodes } = await supabase
             .from('knowledge_nodes')
@@ -856,6 +1117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from('youtube_ingestion_queue')
           .update({
             status: 'completed',
+            processing_step: `Completed: ${nodesCreated} nodes, ${edgesCreated} edges created.`,
             source_id: source?.id || null,
             nodes_created: nodesCreated,
             edges_created: edgesCreated,
@@ -863,14 +1125,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           })
           .eq('id', item.id);
 
-        // Update channel stats
-        await supabase
-          .from('youtube_channels')
-          .update({
-            total_videos_ingested: (item.youtube_channels as any)?.total_videos_ingested + 1 || 1,
-            last_video_published_at: item.published_at,
-          })
-          .eq('id', item.channel_id);
+        // Update source stats (channel or playlist)
+        if (item.playlist_source_id) {
+          try {
+            await supabase.rpc('increment_playlist_ingested', { playlist_id: item.playlist_source_id });
+          } catch {
+            // Fallback: manual update if RPC not available
+            await supabase
+              .from('youtube_playlists')
+              .update({ total_videos_ingested: ((playlistSettings as any)?.total_videos_ingested || 0) + 1 })
+              .eq('id', item.playlist_source_id);
+          }
+        } else if (item.channel_id) {
+          await supabase
+            .from('youtube_channels')
+            .update({
+              total_videos_ingested: (item.youtube_channels as any)?.total_videos_ingested + 1 || 1,
+              last_video_published_at: item.published_at,
+            })
+            .eq('id', item.channel_id);
+        }
 
         // Update user's daily count
         const { data: userSettings } = await supabase
@@ -908,6 +1182,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from('youtube_ingestion_queue')
           .update({
             status: 'failed',
+            processing_step: null,
             error_message: errorMessage,
             completed_at: new Date().toISOString(),
           })

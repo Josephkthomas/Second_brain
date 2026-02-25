@@ -1,9 +1,9 @@
 // QueueStatusPanel - Display YouTube video processing queue
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clock, CheckCircle, XCircle, Loader2, RotateCcw,
-  Trash2, ExternalLink, AlertCircle, Filter, Play
+  Trash2, ExternalLink, AlertCircle, Filter, Play, Youtube, ListVideo, RefreshCw
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -34,7 +34,35 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
   const [statusFilter, setStatusFilter] = useState<YouTubeQueueStatus | 'all'>('all');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  const [processingProgress, setProcessingProgress] = useState<{ processed: number; remaining: number } | null>(null);
+  const [processingProgress, setProcessingProgress] = useState<{ processed: number; remaining: number; currentVideo?: string } | null>(null);
+  const [processingError, setProcessingError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const hasActiveItems = items.some(
+    i => i.status === 'fetching_transcript' || i.status === 'extracting'
+  );
+
+  // Auto-poll while items are actively processing
+  useEffect(() => {
+    if (hasActiveItems || isProcessingQueue) {
+      pollIntervalRef.current = setInterval(() => {
+        onRefresh();
+      }, 5000); // Refresh every 5 seconds
+    }
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [hasActiveItems, isProcessingQueue, onRefresh]);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await onRefresh();
+    setIsRefreshing(false);
+  };
 
   // Filter items
   const filteredItems = items.filter(item => {
@@ -48,67 +76,124 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
     return acc;
   }, {} as Record<string, number>);
 
-  // Process queue now - processes ALL pending videos in batches
+  // Process queue now - processes ALL pending videos one at a time
   const handleProcessNow = async () => {
     if (!session?.access_token || isProcessingQueue) return;
 
     try {
       setIsProcessingQueue(true);
-      setProcessingProgress({ processed: 0, remaining: statusCounts.pending || 0 });
+      setProcessingError(null);
+      const totalPending = statusCounts.pending || 0;
+      setProcessingProgress({ processed: 0, remaining: totalPending });
 
       let totalProcessed = 0;
       let totalCompleted = 0;
+      let totalFailed = 0;
       let hasMoreItems = true;
+      let consecutiveErrors = 0;
 
-      // Loop until all items are processed
+      // Loop: process 1 video per API call until all done
       while (hasMoreItems) {
-        const response = await fetch('/api/youtube/process', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ process_all: true }),
-        });
+        try {
+          const response = await fetch('/api/youtube/process', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ process_all: true }),
+          });
 
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || 'Processing failed');
-        }
+          if (!response.ok) {
+            // Try to read error body — FUNCTION_INVOCATION_FAILED returns HTML, not JSON
+            let errMsg: string;
+            try {
+              const data = await response.json();
+              errMsg = data.error || `Server error ${response.status}`;
+            } catch {
+              errMsg = `Server error ${response.status} (function may have crashed)`;
+            }
+            consecutiveErrors++;
 
-        const result = await response.json();
-        console.log('[QueueStatusPanel] Process batch result:', result);
+            if (consecutiveErrors >= 3) {
+              setProcessingError(`Processing stopped after 3 errors: ${errMsg}`);
+              break;
+            }
 
-        totalProcessed += result.processed || 0;
-        totalCompleted += result.completed || 0;
+            setProcessingError(`Error (attempt ${consecutiveErrors}/3): ${errMsg}`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            continue;
+          }
 
-        // Update progress
-        setProcessingProgress({
-          processed: totalProcessed,
-          remaining: result.remaining || 0,
-        });
+          consecutiveErrors = 0;
+          const result = await response.json();
+          console.log('[Queue] Process response:', JSON.stringify(result));
 
-        // Continue if there are more items
-        hasMoreItems = (result.remaining || 0) > 0 && (result.processed || 0) > 0;
+          // If API returned 0 processed but we expect pending items, show diagnostic
+          if ((result.processed || 0) === 0 && totalProcessed === 0) {
+            const diag = result.diagnostics;
+            if (diag) {
+              const counts = diag.status_counts || {};
+              const parts = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ');
+              setProcessingError(`No items were processed. Queue status: ${parts || 'empty'}. Try refreshing the page.`);
+            } else {
+              setProcessingError('No items were processed. The server may not have found pending items.');
+            }
+            break;
+          }
 
-        // Refresh list after each batch
-        onRefresh();
+          totalProcessed += result.processed || 0;
+          totalCompleted += result.completed || 0;
+          totalFailed += result.failed || 0;
 
-        // Small delay between batches to avoid overwhelming the API
-        if (hasMoreItems) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Update progress
+          setProcessingProgress({
+            processed: totalProcessed,
+            remaining: result.remaining || 0,
+          });
+
+          // Continue if there are more items AND we actually processed something
+          hasMoreItems = (result.remaining || 0) > 0 && (result.processed || 0) > 0;
+
+          // Refresh list after each video completes
+          onRefresh();
+
+          // Brief delay between items
+          if (hasMoreItems) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } catch (err) {
+          consecutiveErrors++;
+          const errMsg = err instanceof Error ? err.message : 'Network error';
+
+          if (consecutiveErrors >= 3) {
+            setProcessingError(`Processing stopped: ${errMsg}`);
+            break;
+          }
+
+          setProcessingError(`Temporary error (retrying): ${errMsg}`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
 
-      console.log(`[QueueStatusPanel] All processing complete. Total: ${totalProcessed} processed, ${totalCompleted} completed`);
+      // Final refresh
+      onRefresh();
+
+      if (totalCompleted > 0) {
+        setProcessingError(null); // Clear transient errors on success
+      }
+
+      // Show completion summary if there were failures
+      if (totalFailed > 0 && !processingError) {
+        setProcessingError(`Completed with issues: ${totalCompleted} succeeded, ${totalFailed} failed. Check failed items for details.`);
+      }
 
       // Refresh the graph to show new nodes and edges
       if (totalCompleted > 0 && onGraphUpdate) {
-        console.log('[QueueStatusPanel] Triggering graph refresh after successful processing');
         onGraphUpdate();
       }
     } catch (err) {
-      console.error('Error processing queue:', err);
+      setProcessingError(err instanceof Error ? err.message : 'Processing failed');
     } finally {
       setIsProcessingQueue(false);
       setProcessingProgress(null);
@@ -139,6 +224,35 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
       onRefresh();
     } catch (err) {
       console.error('Error retrying item:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Reset stuck item (fetching_transcript or extracting → pending)
+  const handleReset = async (itemId: string) => {
+    if (!session?.access_token || actionLoading) return;
+
+    try {
+      setActionLoading(itemId);
+
+      const response = await fetch('/api/youtube/queue', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ id: itemId, action: 'reset' }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to reset');
+      }
+
+      onRefresh();
+    } catch (err) {
+      console.error('Error resetting item:', err);
     } finally {
       setActionLoading(null);
     }
@@ -216,6 +330,45 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
     });
   };
 
+  // Check if item appears stuck (in processing state for > 10 min)
+  const isStuck = (item: YouTubeQueueItem) => {
+    if (item.status !== 'fetching_transcript' && item.status !== 'extracting') return false;
+    if (!item.started_at) return false;
+    return Date.now() - new Date(item.started_at).getTime() > 10 * 60 * 1000;
+  };
+
+  // Build progress steps for actively processing items
+  function getProgressSteps(item: YouTubeQueueItem): Array<{ label: string; detail: string; status: 'active' | 'done' | 'pending' }> {
+    const step = item.processing_step || '';
+
+    if (item.status === 'fetching_transcript') {
+      return [
+        { label: 'Fetching Transcript', detail: step || 'Connecting to YouTube...', status: 'active' },
+        { label: 'Extracting Knowledge', detail: 'Waiting...', status: 'pending' },
+        { label: 'Cross-Referencing Graph', detail: 'Waiting...', status: 'pending' },
+      ];
+    }
+
+    if (item.status === 'extracting') {
+      const isCrossRef = step.toLowerCase().includes('cross-referenc');
+      return [
+        { label: 'Fetching Transcript', detail: 'Done', status: 'done' },
+        {
+          label: 'Extracting Knowledge',
+          detail: isCrossRef ? 'Done' : (step || 'Running AI extraction...'),
+          status: isCrossRef ? 'done' : 'active',
+        },
+        {
+          label: 'Cross-Referencing Graph',
+          detail: isCrossRef ? step : 'Waiting...',
+          status: isCrossRef ? 'active' : 'pending',
+        },
+      ];
+    }
+
+    return [];
+  }
+
   // Empty state
   if (items.length === 0) {
     return (
@@ -273,17 +426,51 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
                 <Loader2 className="w-3 h-3 animate-spin" />
                 {processingProgress
                   ? `Processing... (${processingProgress.processed} done, ${processingProgress.remaining} left)`
-                  : 'Processing...'}
+                  : 'Starting...'}
               </>
             ) : (
               <>
                 <Play className="w-3 h-3" />
-                Process Now
+                Process Now ({statusCounts.pending})
               </>
             )}
           </button>
         )}
       </div>
+
+      {/* Processing error banner */}
+      {processingError && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+          <span className="text-xs text-red-300 flex-1">{processingError}</span>
+          <button
+            onClick={() => setProcessingError(null)}
+            className="text-red-400 hover:text-red-300 text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Active processing banner */}
+      {(hasActiveItems || isProcessingQueue) && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-cyan-500/5 border border-cyan-500/20 rounded-lg">
+          <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin flex-shrink-0" />
+          <span className="text-xs text-cyan-300">
+            {isProcessingQueue
+              ? `Processing videos... ${processingProgress ? `(${processingProgress.processed} of ${processingProgress.processed + processingProgress.remaining})` : ''}`
+              : 'Videos are being processed. Auto-refreshing every 5s.'}
+          </span>
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="ml-auto flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('w-3 h-3', isRefreshing && 'animate-spin')} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      )}
 
       {/* Queue List */}
       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
@@ -297,13 +484,14 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
             const StatusIcon = config.icon;
             const isLoading = actionLoading === item.id;
             const isProcessing = item.status === 'fetching_transcript' || item.status === 'extracting';
+            const stuck = isStuck(item);
 
             return (
               <div
                 key={item.id}
                 className={clsx(
                   'bg-slate-900 border rounded-lg p-4 transition-all',
-                  isProcessing ? 'border-cyan-500/30' : 'border-slate-800'
+                  stuck ? 'border-amber-500/40' : isProcessing ? 'border-cyan-500/30' : 'border-slate-800'
                 )}
               >
                 <div className="flex items-start gap-3">
@@ -333,18 +521,74 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
                       </a>
                     </div>
 
-                    {/* Status */}
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={clsx('flex items-center gap-1 text-xs font-medium', config.color)}>
-                        <StatusIcon className={clsx('w-3 h-3', isProcessing && 'animate-spin')} />
-                        {config.label}
-                      </span>
+                    {/* Source tag + status */}
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      {/* Source tag */}
+                      {item.youtube_playlists?.playlist_name ? (
+                        <span className="flex items-center gap-1 text-xs text-purple-400">
+                          <ListVideo className="w-3 h-3" />
+                          {item.youtube_playlists.playlist_name}
+                        </span>
+                      ) : item.youtube_channels?.channel_name ? (
+                        <span className="flex items-center gap-1 text-xs text-slate-400">
+                          <Youtube className="w-3 h-3" />
+                          {item.youtube_channels.channel_name}
+                        </span>
+                      ) : null}
+
+                      {/* Status badge */}
+                      {!isProcessing && (
+                        <span className={clsx('flex items-center gap-1 text-xs font-medium', config.color)}>
+                          <StatusIcon className="w-3 h-3" />
+                          {config.label}
+                        </span>
+                      )}
                       {item.published_at && (
                         <span className="text-xs text-slate-500">
                           Published: {formatDate(item.published_at)}
                         </span>
                       )}
                     </div>
+
+                    {/* Stuck warning */}
+                    {stuck && (
+                      <div className="flex items-center gap-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-400 mb-2">
+                        <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                        <span>This item appears stuck. Click Reset to retry.</span>
+                      </div>
+                    )}
+
+                    {/* Live progress steps for active items */}
+                    {isProcessing && !stuck && (
+                      <div className="space-y-1.5 mb-2">
+                        {getProgressSteps(item).map(step => (
+                          <div key={step.label} className="flex items-start gap-2">
+                            <div className="mt-0.5 flex-shrink-0">
+                              {step.status === 'done' ? (
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : step.status === 'active' ? (
+                                <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                              ) : (
+                                <div className="w-3.5 h-3.5 rounded-full border border-slate-600" />
+                              )}
+                            </div>
+                            <div>
+                              <div className={clsx(
+                                'text-xs font-medium',
+                                step.status === 'done' ? 'text-emerald-300' :
+                                step.status === 'active' ? 'text-cyan-300' :
+                                'text-slate-500'
+                              )}>
+                                {step.label}
+                              </div>
+                              {step.detail && (
+                                <div className="text-[10px] text-slate-500">{step.detail}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Error Message */}
                     {item.status === 'failed' && item.error_message && (
@@ -368,6 +612,22 @@ export default function QueueStatusPanel({ items, onRefresh, onGraphUpdate }: Qu
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {/* Reset for stuck items (fetching_transcript or extracting) */}
+                    {(item.status === 'fetching_transcript' || item.status === 'extracting') && (
+                      <button
+                        onClick={() => handleReset(item.id)}
+                        disabled={isLoading}
+                        className="p-2 text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
+                        title="Reset stuck item"
+                      >
+                        {isLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+
                     {/* Retry for failed */}
                     {item.status === 'failed' && item.retry_count < item.max_retries && (
                       <button

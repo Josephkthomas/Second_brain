@@ -3,6 +3,17 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
+  "functions": {
+    "api/youtube/process.ts": {
+      "maxDuration": 300
+    },
+    "api/ingest/process.ts": {
+      "maxDuration": 300
+    },
+    "api/queue/delete.ts": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
@@ -33,6 +44,10 @@
     {
       "path": "/api/digest/cron",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/youtube/poll-playlist",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

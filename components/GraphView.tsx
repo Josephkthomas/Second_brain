@@ -2596,23 +2596,14 @@ export const GraphView: React.FC<GraphViewProps> = ({
       {/* Top Indicators - Already exists, will be overlayed if Tag filter is active */}
       
       {/* ... [Legend and Shortcuts - kept same] ... */}
-      <div className="absolute top-28 right-6 pointer-events-none">
-        <div className="bg-slate-900/40 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl pointer-events-auto">
-          <div className="flex items-center space-x-2 text-cyan-400 mb-1">
-             <Cpu size={18} />
-             <h3 className="font-bold text-sm uppercase tracking-wider">Knowledge Graph</h3>
+      {/* Physics Paused Indicator */}
+      {isPaused && (
+        <div className="absolute top-28 right-6 pointer-events-none">
+          <div className="text-center text-[10px] text-amber-500 font-bold uppercase border border-amber-900/50 bg-amber-950/30 backdrop-blur-md rounded px-3 py-1.5">
+            Physics Paused [Space]
           </div>
-          <div className="flex gap-4 text-xs font-mono text-slate-400">
-             <span>Nodes: <b className="text-white">{graphData.nodes.length}</b></span>
-             <span>Edges: <b className="text-white">{graphData.links.length}</b></span>
-          </div>
-          {isPaused && (
-              <div className="mt-2 text-center text-[10px] text-amber-500 font-bold uppercase border border-amber-900/50 bg-amber-950/30 rounded px-2 py-1">
-                  Physics Paused [Space]
-              </div>
-          )}
         </div>
-      </div>
+      )}
 
       <div className="absolute bottom-6 left-6 z-10 pointer-events-auto flex items-end gap-3">
          <div className="relative">

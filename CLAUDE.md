@@ -27,6 +27,8 @@
 | UI/styling changes | Styling and Theming | `utils/theme.ts`, Tailwind classes |
 | New lens/filter | Lenses | `constants.ts`, `components/GraphView.tsx` |
 | Orientation/digests | Orientation Engine | `components/OrientationCenter.tsx`, `services/digest.ts`, `services/digestAgents.ts` |
+| YouTube playlists | YouTube Playlist Ingestion | `components/youtube/PlaylistList.tsx`, `components/youtube/AddPlaylistModal.tsx`, `api/youtube/playlists.ts`, `api/youtube/poll-playlist.ts` |
+| Transcript extraction | Tiered Transcript Extraction | `services/transcriptExtractor.ts` |
 
 ### After Making Changes
 
@@ -94,9 +96,18 @@
 │   ├── Login.tsx              # Sign-in page
 │   └── Register.tsx           # Account creation page
 │
+├── components/youtube/         # YouTube Feature Module
+│   ├── YouTubeManager.tsx     # Main hub with tabs: channels, playlists, queue, history
+│   ├── PlaylistList.tsx       # Connected playlist cards with status/actions
+│   ├── AddPlaylistModal.tsx   # Playlist connection setup wizard
+│   ├── ChannelList.tsx        # Subscribed channel cards
+│   ├── AddChannelModal.tsx    # Channel subscription modal
+│   └── ...                    # Other YouTube components
+│
 ├── services/                  # Business Logic and API Integration
 │   ├── supabase.ts            # [14KB] All database operations
 │   ├── gemini.ts              # [31KB] All AI operations
+│   ├── transcriptExtractor.ts # Tiered transcript extraction (caption-extractor → Innertube → Apify)
 │   ├── digest.ts              # Digest CRUD (profiles, modules, channels, history)
 │   └── digestAgents.ts        # Digest AI orchestration (sub-agents + meta-agent)
 │
@@ -225,6 +236,28 @@ relation_type TEXT NOT NULL     -- leads_to, blocks, etc.
 evidence TEXT                   -- Why this relationship exists
 created_at TIMESTAMPTZ
 user_id UUID
+```
+
+### youtube_playlists
+
+```sql
+id UUID PRIMARY KEY
+user_id UUID                    -- FK to auth.users (RLS)
+playlist_id TEXT NOT NULL       -- YouTube playlist ID (PLxxxx)
+playlist_url TEXT NOT NULL
+playlist_name TEXT
+synapse_code TEXT NOT NULL      -- Generated code (e.g., SYN-7K3M)
+auto_process BOOLEAN            -- Auto-process new videos
+extraction_mode TEXT             -- comprehensive, strategic, etc.
+anchor_emphasis TEXT
+linked_anchor_ids UUID[]
+custom_instructions TEXT
+last_polled_at TIMESTAMPTZ
+known_video_count INTEGER
+total_videos_ingested INTEGER
+is_active BOOLEAN
+connection_status TEXT           -- pending, verified, error, disconnected
+connection_error TEXT
 ```
 
 ### digest_profiles
@@ -362,6 +395,18 @@ generation_time_ms INTEGER
 
 - `generateDigest(profileId, onProgress?)` - Full digest generation orchestration
 - `getTimeRange(frequency)` - Calculate reporting period
+
+### Transcript Extractor (`services/transcriptExtractor.ts`)
+
+- `extractTranscript(videoId, videoUrl, apifyApiKey?)` - Tiered extraction with fallback
+- `generatePlaylistCode()` - Generate unique SYN-XXXX code
+- `extractPlaylistId(url)` - Parse playlist ID from YouTube URL
+
+**Extraction tiers:**
+1. `youtube-caption-extractor` (free, fast, ~90% success)
+2. Innertube API direct (free, backup)
+3. Apify transcript scraper (paid, reliable)
+4. Manual fallback (no transcript available)
 
 ---
 
@@ -580,6 +625,9 @@ git branch -d feature/name
 | Modify digest UI | `components/OrientationCenter.tsx` |
 | Modify digest generation | `services/digestAgents.ts`, `api/digest/generate.ts` |
 | Add delivery channel | `api/digest/deliver.ts`, `components/OrientationCenter.tsx` |
+| Add YouTube playlist feature | `components/youtube/PlaylistList.tsx`, `api/youtube/playlists.ts` |
+| Modify transcript extraction | `services/transcriptExtractor.ts` |
+| Modify playlist polling | `api/youtube/poll-playlist.ts` |
 
 ---
 
