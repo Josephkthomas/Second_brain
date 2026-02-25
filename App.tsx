@@ -15,27 +15,15 @@ import { SourcesSidebar } from './components/SourcesSidebar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { fetchTableData } from './services/supabase';
 import { TableRow, LensType, GraphNode } from './types';
-import { LENS_CONFIG } from './constants';
 import { AutomatePanel } from './components/AutomatePanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { OrientationCenter } from './components/OrientationCenter';
 import QueueHub from './components/QueueHub';
 import {
   RefreshCw, Sparkles, X, Database,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, MessageSquare, BookOpen, LogOut, Settings, Workflow, Compass, ListTodo
+  Plus, MessageSquare, BookOpen, LogOut, Settings, Workflow, Compass, ListTodo
 } from 'lucide-react';
 import clsx from 'clsx';
-
-// Icon Map for Lenses
-const LENS_ICONS: Record<LensType, any> = {
-  'All': Layers,
-  'Social': Users,
-  'Strategic': Target,
-  'Operational': ShieldAlert,
-  'Creative': Lightbulb,
-  'Pathways': GitMerge,
-  'AnchorFocus': Scan
-};
 
 const MainApp: React.FC = () => {
   const { signOut, user } = useAuth();
@@ -50,7 +38,6 @@ const MainApp: React.FC = () => {
   const [showOrientation, setShowOrientation] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
-  const [showLensDropdown, setShowLensDropdown] = useState(false);
 
   // Source Explorer State
   const [showSourceExplorer, setShowSourceExplorer] = useState(false);
@@ -214,7 +201,7 @@ const MainApp: React.FC = () => {
       {/* 2. OVERLAY LAYER (Floating UI) */}
       <div className="absolute inset-0 z-10 pointer-events-none">
         
-        {/* --- TOP LEFT ISLAND (Primary Actions + Lenses) --- */}
+        {/* --- TOP LEFT ISLAND (Primary Actions) --- */}
         <div className={clsx(
           "absolute top-6 z-50 pointer-events-auto transition-all duration-300",
           showSourceExplorer ? "left-[304px]" : "left-6"
@@ -290,78 +277,6 @@ const MainApp: React.FC = () => {
                 <Compass size={16} />
                 <span className="hidden sm:inline">Orientation</span>
               </button>
-
-              {/* Divider */}
-              <div className="w-px h-6 bg-white/10" />
-
-              {/* Lenses Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowLensDropdown(prev => !prev)}
-                  className={clsx(
-                    "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
-                    showLensDropdown || currentLens !== 'All'
-                      ? "bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/40"
-                      : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
-                  )}
-                  title="Graph Lenses"
-                >
-                  {(() => { const ActiveIcon = LENS_ICONS[currentLens]; return <ActiveIcon size={16} />; })()}
-                  <span className="hidden sm:inline">Lenses</span>
-                  <ChevronDown size={12} className={clsx("transition-transform", showLensDropdown && "rotate-180")} />
-                </button>
-
-                {/* Lens Dropdown Panel */}
-                {showLensDropdown && (
-                  <>
-                    {/* Backdrop to close */}
-                    <div className="fixed inset-0 z-[99]" onClick={() => setShowLensDropdown(false)} />
-
-                    <div className="absolute top-full left-0 mt-2 w-72 bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-[100] overflow-hidden">
-                      <div className="px-3 py-2 border-b border-white/5">
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Graph Lenses</span>
-                      </div>
-                      <div className="py-1">
-                        {(Object.keys(LENS_CONFIG) as LensType[]).map((lensKey, idx) => {
-                          const Icon = LENS_ICONS[lensKey];
-                          const isActive = currentLens === lensKey;
-                          const config = LENS_CONFIG[lensKey];
-
-                          const accentColor = lensKey === 'Pathways' ? 'text-purple-400' : lensKey === 'AnchorFocus' ? 'text-amber-400' : 'text-cyber-cyan';
-
-                          return (
-                            <button
-                              key={lensKey}
-                              onClick={() => { setCurrentLens(lensKey); setShowLensDropdown(false); }}
-                              className={clsx(
-                                "w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors",
-                                isActive
-                                  ? "bg-white/5"
-                                  : "hover:bg-white/[0.03]"
-                              )}
-                            >
-                              <div className={clsx(
-                                "mt-0.5 p-1.5 rounded-md shrink-0",
-                                isActive ? `bg-white/10 ${accentColor}` : "bg-white/5 text-slate-500"
-                              )}>
-                                <Icon size={14} />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className={clsx("text-xs font-semibold", isActive ? "text-white" : "text-slate-300")}>{config.label}</span>
-                                  <span className="text-[10px] text-slate-600 font-mono">{idx + 1}</span>
-                                  {isActive && <span className={clsx("w-1.5 h-1.5 rounded-full ml-auto shrink-0", accentColor === 'text-purple-400' ? 'bg-purple-400' : accentColor === 'text-amber-400' ? 'bg-amber-400' : 'bg-cyber-cyan')} />}
-                                </div>
-                                <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5 line-clamp-2">{config.description}</p>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
 
             </div>
         </div>

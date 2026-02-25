@@ -9,7 +9,8 @@ import {
   MousePointer2, Magnet, Loader2, Link as LinkIcon,
   Waves, Grid, Network, MessageSquare, Edit3, Save, Trash2, Plus, ArrowRight,
   Search, Move, Sparkles, Hand, Cable, ChevronRight, Layers, Copy, Pin, CheckSquare, Square,
-  Keyboard, Command, CornerDownLeft, Filter, User, Bot
+  Keyboard, Command, CornerDownLeft, Filter, User, Bot,
+  Users, Target, ShieldAlert, Lightbulb
 } from 'lucide-react';
 import { fetchTableData, deleteRows, insertRows, mergeNodes, getCurrentUserId, fetchExistingNodes, fetchRelevantNodes, semanticSearchNodesExtended, getSupabase } from '../services/supabase';
 import { generateCrossConnections, suggestRelationship, generateEmbedding, connectAnchorToKnowledgeEnhanced, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
@@ -58,6 +59,11 @@ const REL_SEMANTICS = {
 
 type FlowType = 'positive' | 'negative' | 'neutral';
 type InteractionMode = 'select' | 'pan' | 'scan' | 'link' | 'merge' | 'pin';
+
+const LENS_ICONS: Record<LensType, any> = {
+  'All': Layers, 'Social': Users, 'Strategic': Target, 'Operational': ShieldAlert,
+  'Creative': Lightbulb, 'Pathways': GitMerge, 'AnchorFocus': Scan,
+};
 
 const MODE_CONFIG: Record<InteractionMode, { label: string; description: string; icon: any }> = {
     select: { label: 'Select', description: 'Click to view, drag to move.', icon: MousePointer2 },
@@ -772,6 +778,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
   // Interaction Modes
   const [interactionMode, setInteractionMode] = useState<InteractionMode>('select');
   const [showModeMenu, setShowModeMenu] = useState(false);
+  const [showLensMenu, setShowLensMenu] = useState(false);
 
   // Lasso & Pathfinding State
   const [selectionRect, setSelectionRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
@@ -2748,7 +2755,59 @@ export const GraphView: React.FC<GraphViewProps> = ({
                    </div>
                )}
            </div>
-           
+
+           {/* LENS SELECTOR */}
+           <div className="relative group">
+               <button
+                 onClick={() => setShowLensMenu(!showLensMenu)}
+                 className={clsx(
+                    "p-2.5 rounded-md transition-colors relative",
+                    showLensMenu || activeLens !== 'All' ? "bg-white/10 text-cyan-400" : "text-slate-500 hover:text-white hover:bg-white/10"
+                 )}
+                 title="Graph Lenses"
+               >
+                  {(() => { const LIcon = LENS_ICONS[activeLens]; return <LIcon size={20} />; })()}
+                  {activeLens !== 'All' && <span className="absolute top-1 right-1 w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></span>}
+               </button>
+
+               {showLensMenu && (
+                   <div className="absolute left-full top-0 ml-3 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-64 overflow-hidden z-50 animate-in slide-in-from-left-2 fade-in">
+                       <div className="px-3 py-2 bg-slate-950/50 border-b border-slate-800">
+                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Graph Lenses</span>
+                       </div>
+                       <div className="p-1">
+                           {(Object.keys(LENS_CONFIG) as LensType[]).map((lensKey) => {
+                               const LensIcon = LENS_ICONS[lensKey];
+                               const config = LENS_CONFIG[lensKey];
+                               const isActive = activeLens === lensKey;
+                               return (
+                               <button
+                                   key={lensKey}
+                                   onClick={() => { onLensChange(lensKey); setShowLensMenu(false); }}
+                                   className={clsx(
+                                       "w-full text-left flex items-start gap-3 p-2 rounded transition-colors group",
+                                       isActive ? "bg-cyan-900/20" : "hover:bg-slate-800"
+                                   )}
+                               >
+                                   <div className={clsx("mt-0.5 p-1 rounded", isActive ? "text-cyan-400 bg-cyan-900/30" : "text-slate-400 group-hover:text-slate-200")}>
+                                       <LensIcon size={16} />
+                                   </div>
+                                   <div>
+                                       <div className={clsx("text-sm font-bold", isActive ? "text-cyan-400" : "text-slate-200")}>{config.label}</div>
+                                       <div className="text-[10px] text-slate-500 leading-tight">{config.description}</div>
+                                   </div>
+                                   {isActive && (
+                                       <div className="ml-auto self-center text-cyan-500">
+                                           <CheckCircle2 size={14} />
+                                       </div>
+                                   )}
+                               </button>
+                           )})}
+                       </div>
+                   </div>
+               )}
+           </div>
+
            <div className="h-px w-full bg-white/10 my-1"></div>
 
            {/* TAG FILTER */}
