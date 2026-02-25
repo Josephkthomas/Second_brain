@@ -21,8 +21,8 @@ import { HistoryPanel } from './components/HistoryPanel';
 import { OrientationCenter } from './components/OrientationCenter';
 import QueueHub from './components/QueueHub';
 import {
-  RefreshCw, Sparkles, BrainCircuit, X, Database, Search,
-  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, Info, MessageSquare, ChevronLeft, ChevronUp, BookOpen, LogOut, Settings, Anchor, Zap, Workflow, Compass, ListTodo
+  RefreshCw, Sparkles, X, Database,
+  Layers, Users, Target, ShieldAlert, Lightbulb, GitMerge, Scan, Network, Plus, Share2, Menu, ChevronDown, MessageSquare, BookOpen, LogOut, Settings, Workflow, Compass, ListTodo
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -50,6 +50,7 @@ const MainApp: React.FC = () => {
   const [showOrientation, setShowOrientation] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentLens, setCurrentLens] = useState<LensType>('All');
+  const [showLensDropdown, setShowLensDropdown] = useState(false);
 
   // Source Explorer State
   const [showSourceExplorer, setShowSourceExplorer] = useState(false);
@@ -213,143 +214,11 @@ const MainApp: React.FC = () => {
       {/* 2. OVERLAY LAYER (Floating UI) */}
       <div className="absolute inset-0 z-10 pointer-events-none">
         
-        {/* --- TOP LEFT ISLAND (Branding & Lenses) --- */}
+        {/* --- TOP LEFT ISLAND (Primary Actions + Lenses) --- */}
         <div className={clsx(
-          "absolute top-6 z-50 pointer-events-auto flex flex-col gap-2 transition-all duration-300",
+          "absolute top-6 z-50 pointer-events-auto transition-all duration-300",
           showSourceExplorer ? "left-[304px]" : "left-6"
         )}>
-           
-           {/* Board Title */}
-           <div 
-             className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg px-4 py-3 shadow-xl flex items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors group min-w-[280px]"
-             onClick={() => setViewMode('graph')}
-           >
-              <div className="bg-cyber-cyan/10 p-1.5 rounded-md text-cyber-cyan group-hover:scale-110 transition-transform">
-                <BrainCircuit size={20} />
-              </div>
-              <div>
-                  <h1 className="text-sm font-bold text-white tracking-wide leading-none mb-0.5">SYNAPSE BOARD</h1>
-                  <span className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    System Online
-                  </span>
-              </div>
-           </div>
-
-           {/* Lens Selector */}
-           <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-3 shadow-xl flex flex-col gap-2 min-w-[280px]">
-              <div className="flex items-center justify-between px-1 mb-1">
-                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active View Lens</span>
-                 <div className="relative group">
-                    <Info size={12} className="text-slate-600 cursor-help hover:text-white transition-colors" />
-                    
-                    {/* INFO TOOLTIP */}
-                    <div className="absolute top-full -left-1 mt-3 w-64 bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[100] translate-y-2 group-hover:translate-y-0">
-                        <div className="text-xs font-bold text-white mb-1 flex items-center gap-2">
-                            <BrainCircuit size={12} className="text-cyber-cyan"/> Neural Pathways
-                        </div>
-                        <p className="text-[10px] text-slate-400 leading-relaxed">
-                            Simulates distinct neural pathways to adapt the graph for different scenarios. Depending on the lens chosen, specific notes are highlighted to support strategic, operational, or creative thinking.
-                        </p>
-                        {/* Triangle Arrow */}
-                        <div className="absolute -top-1 left-1.5 w-2 h-2 bg-slate-900 rotate-45 border-t border-l border-slate-700"></div>
-                    </div>
-                 </div>
-              </div>
-              
-              {/* Flex Wrap Container (No Scrollbars) */}
-              <div className="flex items-center gap-2 flex-wrap">
-                  {(Object.keys(LENS_CONFIG) as LensType[]).map((lensKey, idx) => {
-                      const Icon = LENS_ICONS[lensKey];
-                      const isActive = currentLens === lensKey;
-                      const config = LENS_CONFIG[lensKey];
-                      
-                      // Special styling for special views (Pathways & AnchorFocus)
-                      let baseClass = "p-2.5 rounded-md transition-all relative border";
-                      let colorClass = "";
-                      
-                      if (lensKey === 'Pathways') {
-                        // Purple Theme
-                        if (isActive) {
-                             colorClass = "bg-cyber-purple/20 text-cyber-purple border-cyber-purple/50 shadow-[0_0_15px_rgba(168,85,247,0.3)]";
-                        } else {
-                             colorClass = "bg-transparent text-cyber-purple/60 border-transparent hover:bg-cyber-purple/10 hover:text-cyber-purple hover:border-cyber-purple/30";
-                        }
-                      } else if (lensKey === 'AnchorFocus') {
-                        // Amber Theme
-                        if (isActive) {
-                             colorClass = "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.3)]";
-                        } else {
-                             colorClass = "bg-transparent text-amber-500/60 border-transparent hover:bg-amber-500/10 hover:text-amber-400 hover:border-amber-500/30";
-                        }
-                      } else {
-                        // Standard Cyan/Slate Theme
-                        if (isActive) {
-                            colorClass = "bg-cyber-cyan/10 text-cyber-cyan border-cyber-cyan/30 shadow-[0_0_10px_rgba(6,182,212,0.1)]";
-                        } else {
-                            colorClass = "bg-transparent text-slate-500 border-transparent hover:text-slate-300 hover:bg-white/5 hover:border-white/10";
-                        }
-                      }
-
-                      return (
-                          <div key={lensKey} className="group relative">
-                              <button
-                                  onClick={() => setCurrentLens(lensKey)}
-                                  className={clsx(baseClass, colorClass)}
-                              >
-                                  <Icon size={18} />
-                                  <span className="absolute -bottom-2 right-0 text-[8px] opacity-0 group-hover:opacity-50 text-slate-500 font-mono transition-opacity">{idx + 1}</span>
-                                  
-                                  {/* Special Indicator Dot for special modes */}
-                                  {(lensKey === 'Pathways' || lensKey === 'AnchorFocus') && (
-                                     <span className={clsx(
-                                       "absolute -top-1 -right-1 w-2 h-2 rounded-full",
-                                       isActive ? (lensKey === 'Pathways' ? "bg-cyber-purple animate-pulse" : "bg-amber-500 animate-pulse") : "hidden"
-                                     )}></span>
-                                  )}
-                              </button>
-                              
-                              {/* RICH TOOLTIP (Fixed Position z-index) */}
-                              <div className="absolute top-full left-0 mt-3 w-64 bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[100] translate-y-2 group-hover:translate-y-0">
-                                  <div className="flex items-center gap-2 mb-1.5">
-                                     <Icon size={14} className={isActive ? "text-white" : (lensKey === 'Pathways' ? "text-cyber-purple" : (lensKey === 'AnchorFocus' ? "text-amber-400" : "text-cyber-cyan"))} />
-                                     <span className="text-xs font-bold text-white uppercase tracking-wider">{config.label}</span>
-                                     <span className="ml-auto text-[10px] bg-slate-800 px-1.5 rounded text-slate-400 font-mono">Key: {idx+1}</span>
-                                  </div>
-                                  <p className="text-[10px] text-slate-400 leading-relaxed border-t border-white/10 pt-1.5">
-                                      {config.description}
-                                  </p>
-                                  {/* Triangle Arrow */}
-                                  <div className="absolute -top-1 left-3 w-2 h-2 bg-slate-900 rotate-45 border-t border-l border-slate-700"></div>
-                              </div>
-                          </div>
-                      )
-                  })}
-              </div>
-           </div>
-        </div>
-
-        {/* --- TOP RIGHT ISLAND (Actions, Profile, Share) --- */}
-        <div className="absolute top-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
-            {/* Context Actions (Table Mode) */}
-            {viewMode === 'table' && currentTable && (
-                 <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-1 shadow-xl">
-                    <button onClick={() => loadData(currentTable)} className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-white">
-                       <RefreshCw size={18} className={clsx(loading && "animate-spin")} />
-                    </button>
-                    <button 
-                      onClick={() => setIsAnalystOpen(!isAnalystOpen)}
-                      className={clsx(
-                        "p-2 rounded-md transition-all text-slate-400 hover:text-indigo-400",
-                        isAnalystOpen && "text-indigo-400 bg-indigo-500/10"
-                      )}
-                    >
-                      <Sparkles size={18} />
-                    </button>
-                 </div>
-            )}
-            
-            {/* Primary Actions — Order: Inject → Sources → Automate → Queue */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
 
               {/* Inject — Cyan (Primary CTA) */}
@@ -422,7 +291,100 @@ const MainApp: React.FC = () => {
                 <span className="hidden sm:inline">Orientation</span>
               </button>
 
+              {/* Divider */}
+              <div className="w-px h-6 bg-white/10" />
+
+              {/* Lenses Dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowLensDropdown(prev => !prev)}
+                  className={clsx(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all border group",
+                    showLensDropdown || currentLens !== 'All'
+                      ? "bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/40"
+                      : "bg-transparent text-slate-400 border-transparent hover:bg-white/5 hover:text-white"
+                  )}
+                  title="Graph Lenses"
+                >
+                  {(() => { const ActiveIcon = LENS_ICONS[currentLens]; return <ActiveIcon size={16} />; })()}
+                  <span className="hidden sm:inline">Lenses</span>
+                  <ChevronDown size={12} className={clsx("transition-transform", showLensDropdown && "rotate-180")} />
+                </button>
+
+                {/* Lens Dropdown Panel */}
+                {showLensDropdown && (
+                  <>
+                    {/* Backdrop to close */}
+                    <div className="fixed inset-0 z-[99]" onClick={() => setShowLensDropdown(false)} />
+
+                    <div className="absolute top-full left-0 mt-2 w-72 bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-[100] overflow-hidden">
+                      <div className="px-3 py-2 border-b border-white/5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Graph Lenses</span>
+                      </div>
+                      <div className="py-1">
+                        {(Object.keys(LENS_CONFIG) as LensType[]).map((lensKey, idx) => {
+                          const Icon = LENS_ICONS[lensKey];
+                          const isActive = currentLens === lensKey;
+                          const config = LENS_CONFIG[lensKey];
+
+                          const accentColor = lensKey === 'Pathways' ? 'text-purple-400' : lensKey === 'AnchorFocus' ? 'text-amber-400' : 'text-cyber-cyan';
+
+                          return (
+                            <button
+                              key={lensKey}
+                              onClick={() => { setCurrentLens(lensKey); setShowLensDropdown(false); }}
+                              className={clsx(
+                                "w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors",
+                                isActive
+                                  ? "bg-white/5"
+                                  : "hover:bg-white/[0.03]"
+                              )}
+                            >
+                              <div className={clsx(
+                                "mt-0.5 p-1.5 rounded-md shrink-0",
+                                isActive ? `bg-white/10 ${accentColor}` : "bg-white/5 text-slate-500"
+                              )}>
+                                <Icon size={14} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className={clsx("text-xs font-semibold", isActive ? "text-white" : "text-slate-300")}>{config.label}</span>
+                                  <span className="text-[10px] text-slate-600 font-mono">{idx + 1}</span>
+                                  {isActive && <span className={clsx("w-1.5 h-1.5 rounded-full ml-auto shrink-0", accentColor === 'text-purple-400' ? 'bg-purple-400' : accentColor === 'text-amber-400' ? 'bg-amber-400' : 'bg-cyber-cyan')} />}
+                                </div>
+                                <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5 line-clamp-2">{config.description}</p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
             </div>
+        </div>
+
+        {/* --- TOP RIGHT ISLAND (Profile, Settings) --- */}
+        <div className="absolute top-6 right-6 z-50 pointer-events-auto flex items-center gap-3">
+            {/* Context Actions (Table Mode) */}
+            {viewMode === 'table' && currentTable && (
+                 <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-1 shadow-xl">
+                    <button onClick={() => loadData(currentTable)} className="p-2 hover:bg-white/10 rounded-md text-slate-400 hover:text-white">
+                       <RefreshCw size={18} className={clsx(loading && "animate-spin")} />
+                    </button>
+                    <button
+                      onClick={() => setIsAnalystOpen(!isAnalystOpen)}
+                      className={clsx(
+                        "p-2 rounded-md transition-all text-slate-400 hover:text-indigo-400",
+                        isAnalystOpen && "text-indigo-400 bg-indigo-500/10"
+                      )}
+                    >
+                      <Sparkles size={18} />
+                    </button>
+                 </div>
+            )}
 
             {/* User & Sign Out */}
             <div className="bg-cyber-slate/90 backdrop-blur-md border border-white/10 rounded-lg p-1.5 flex items-center gap-2 shadow-xl">
