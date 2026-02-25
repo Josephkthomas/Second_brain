@@ -9,39 +9,39 @@ export const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY |
 export const COMMON_TABLES: string[] = ['knowledge_nodes', 'knowledge_edges'];
 
 export const LENS_CONFIG: Record<LensType, { label: string; types: string[]; description: string }> = {
-  'All': { 
-    label: 'Holistic View', 
-    types: [], 
-    description: 'Displays the entire knowledge graph. Best for initial exploration and seeing all connections.' 
+  'All': {
+    label: 'Holistic View',
+    types: [],
+    description: 'Full graph with all connections visible.'
   },
-  'Social': { 
-    label: 'Stakeholders', 
-    types: ['Person', 'Organization', 'Team'], 
-    description: 'Filters for People and Organizations. Best for understanding team structure and key players.' 
+  'Social': {
+    label: 'Stakeholders',
+    types: ['Person', 'Organization', 'Team'],
+    description: 'People, teams, and organisations.'
   },
-  'Strategic': { 
-    label: 'Strategy & Decisions', 
-    types: ['Anchor', 'Goal', 'Project', 'Decision', 'Insight', 'Hypothesis'], 
-    description: 'Filters for high-level Goals and Projects. Best for planning and decision tracking.' 
+  'Strategic': {
+    label: 'Strategy & Decisions',
+    types: ['Anchor', 'Goal', 'Project', 'Decision', 'Insight', 'Hypothesis'],
+    description: 'Goals, projects, and key decisions.'
   },
-  'Operational': { 
-    label: 'Risks & Actions', 
-    types: ['Action', 'Risk', 'Blocker', 'Question'], 
-    description: 'Filters for immediate Actions and Blockers. Best for project management and day-to-day ops.' 
+  'Operational': {
+    label: 'Risks & Actions',
+    types: ['Action', 'Risk', 'Blocker', 'Question'],
+    description: 'Actions, blockers, and open risks.'
   },
-  'Creative': { 
-    label: 'Ideas & Topics', 
-    types: ['Topic', 'Idea', 'Concept', 'Takeaway', 'Lesson'], 
-    description: 'Filters for Concepts and Topics. Best for brainstorming, learning, and linking ideas.' 
+  'Creative': {
+    label: 'Ideas & Topics',
+    types: ['Topic', 'Idea', 'Concept', 'Takeaway', 'Lesson'],
+    description: 'Concepts, ideas, and takeaways.'
   },
-  'Pathways': { 
-    label: 'Connection Flows', 
-    types: [], 
-    description: 'Visualizes the direction of influence (Synaptic Flow). Best for tracing cause-and-effect or dependencies.' 
-  }, 
-  'AnchorFocus': { 
-    label: 'Anchor Focus', 
-    types: [], 
-    description: 'Isolates a specific Goal or Project and its immediate context. Best for deep-diving into one specific area.' 
-  } 
+  'Pathways': {
+    label: 'Connection Flows',
+    types: [],
+    description: 'Directional influence and dependencies.'
+  },
+  'AnchorFocus': {
+    label: 'Anchor Focus',
+    types: [],
+    description: 'Isolate one anchor and its context.'
+  }
 };

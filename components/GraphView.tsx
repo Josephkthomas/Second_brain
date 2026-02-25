@@ -2762,11 +2762,12 @@ export const GraphView: React.FC<GraphViewProps> = ({
                  onClick={() => setShowLensMenu(!showLensMenu)}
                  className={clsx(
                     "p-2.5 rounded-md transition-colors relative",
-                    showLensMenu || activeLens !== 'All' ? "bg-white/10 text-cyan-400" : "text-slate-500 hover:text-white hover:bg-white/10"
+                    showLensMenu ? "bg-white/10 text-white" : "text-slate-300 hover:text-white hover:bg-white/10"
                  )}
                  title="Graph Lenses"
                >
                   {(() => { const LIcon = LENS_ICONS[activeLens]; return <LIcon size={20} />; })()}
+                  <div className="absolute bottom-1 right-1 w-1.5 h-1.5 border-r border-b border-current opacity-50 rotate-45"></div>
                   {activeLens !== 'All' && <span className="absolute top-1 right-1 w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></span>}
                </button>
 
