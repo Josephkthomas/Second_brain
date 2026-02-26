@@ -779,6 +779,42 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               {profile.description && (
                 <p className="text-xs text-slate-400 mb-3 line-clamp-2">{profile.description}</p>
               )}
+              {/* Last generated & next digest timing */}
+              <div className="flex items-center gap-4 mb-3 text-[10px]">
+                <div className="flex items-center gap-1 text-slate-500">
+                  <History size={10} />
+                  <span>
+                    {profile.last_generated_at
+                      ? `Last: ${new Date(profile.last_generated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} at ${new Date(profile.last_generated_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+                      : 'Never generated'}
+                  </span>
+                </div>
+                {profile.is_active && (
+                  <div className="flex items-center gap-1 text-cyan-500/70">
+                    <Clock size={10} />
+                    <span>
+                      {(() => {
+                        if (!profile.last_generated_at) return 'Next: Pending';
+                        const last = new Date(profile.last_generated_at);
+                        const next = new Date(last);
+                        if (profile.frequency === 'daily') next.setDate(next.getDate() + 1);
+                        else if (profile.frequency === 'weekly') next.setDate(next.getDate() + 7);
+                        else if (profile.frequency === 'monthly') next.setMonth(next.getMonth() + 1);
+                        const now = new Date();
+                        if (next <= now) return 'Next: Due now';
+                        const diffMs = next.getTime() - now.getTime();
+                        const diffH = Math.floor(diffMs / (1000 * 60 * 60));
+                        const diffM = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                        if (diffH >= 24) {
+                          const days = Math.floor(diffH / 24);
+                          return `Next: in ${days}d ${diffH % 24}h`;
+                        }
+                        return `Next: in ${diffH}h ${diffM}m`;
+                      })()}
+                    </span>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 text-[10px] text-slate-600">
                   <span>{DENSITY_LABELS[profile.density]}</span>
