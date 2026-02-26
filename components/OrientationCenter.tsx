@@ -794,14 +794,29 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                     <Clock size={10} />
                     <span>
                       {(() => {
-                        if (!profile.last_generated_at) return 'Next: Pending';
-                        const last = new Date(profile.last_generated_at);
-                        const next = new Date(last);
-                        if (profile.frequency === 'daily') next.setDate(next.getDate() + 1);
-                        else if (profile.frequency === 'weekly') next.setDate(next.getDate() + 7);
-                        else if (profile.frequency === 'monthly') next.setMonth(next.getMonth() + 1);
                         const now = new Date();
-                        if (next <= now) return 'Next: Due now';
+                        const [h, m] = (profile.delivery_time || '08:00').split(':').map(Number);
+                        let next: Date;
+                        if (profile.frequency === 'daily') {
+                          next = new Date(now);
+                          next.setHours(h, m, 0, 0);
+                          if (next <= now) next.setDate(next.getDate() + 1);
+                        } else if (profile.frequency === 'weekly') {
+                          const targetDay = profile.delivery_day_of_week ?? 1;
+                          next = new Date(now);
+                          next.setHours(h, m, 0, 0);
+                          const currentDay = now.getDay();
+                          let daysUntil = targetDay - currentDay;
+                          if (daysUntil < 0) daysUntil += 7;
+                          if (daysUntil === 0 && next <= now) daysUntil = 7;
+                          next.setDate(now.getDate() + daysUntil);
+                        } else if (profile.frequency === 'monthly') {
+                          const targetDay = profile.delivery_day_of_month ?? 1;
+                          next = new Date(now.getFullYear(), now.getMonth(), targetDay, h, m, 0, 0);
+                          if (next <= now) next.setMonth(next.getMonth() + 1);
+                        } else {
+                          return 'Next: Unknown';
+                        }
                         const diffMs = next.getTime() - now.getTime();
                         const diffH = Math.floor(diffMs / (1000 * 60 * 60));
                         const diffM = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
@@ -809,6 +824,7 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
                           const days = Math.floor(diffH / 24);
                           return `Next: in ${days}d ${diffH % 24}h`;
                         }
+                        if (diffH === 0) return `Next: in ${diffM}m`;
                         return `Next: in ${diffH}h ${diffM}m`;
                       })()}
                     </span>

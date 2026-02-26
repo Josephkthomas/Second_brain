@@ -51,25 +51,60 @@ function getTimeRange(frequency: string): { from: string; to: string } {
   return { from: from.toISOString(), to: now.toISOString() };
 }
 
-// Check if a profile is due for generation
+// Check if a profile is due for generation.
+// Calculates the most recent past scheduled delivery time based on the
+// profile's delivery_time, delivery_day_of_week, delivery_day_of_month,
+// and timezone. If last_generated_at is before that scheduled time,
+// the profile is due. This ensures schedule edits take effect immediately —
+// e.g. if a weekly digest was sent Monday and the user changes to Tuesday,
+// it will resend on Tuesday.
 function isProfileDue(profile: any): boolean {
   const now = new Date();
   const lastGenerated = profile.last_generated_at ? new Date(profile.last_generated_at) : null;
 
   if (!lastGenerated) return true; // Never generated
 
-  const hoursSinceLastGen = (now.getTime() - lastGenerated.getTime()) / (1000 * 60 * 60);
+  const tz = profile.timezone || 'UTC';
+  const [schedH, schedM] = (profile.delivery_time || '08:00').split(':').map(Number);
 
-  switch (profile.frequency) {
-    case 'daily':
-      return hoursSinceLastGen >= 20; // Allow some buffer
-    case 'weekly':
-      return hoursSinceLastGen >= 164; // ~6.8 days
-    case 'monthly':
-      return hoursSinceLastGen >= 672; // ~28 days
-    default:
-      return false;
+  // Get current and last-generated wall-clock time in the user's timezone
+  const nowInTz = new Date(now.toLocaleString('en-US', { timeZone: tz, hour12: false }));
+  const lastInTz = new Date(lastGenerated.toLocaleString('en-US', { timeZone: tz, hour12: false }));
+
+  // Calculate the most recent past scheduled delivery time (in user's TZ)
+  let mostRecentScheduled: Date;
+
+  if (profile.frequency === 'daily') {
+    mostRecentScheduled = new Date(nowInTz);
+    mostRecentScheduled.setHours(schedH, schedM, 0, 0);
+    if (mostRecentScheduled > nowInTz) {
+      // Today's slot hasn't arrived yet — look at yesterday's slot
+      mostRecentScheduled.setDate(mostRecentScheduled.getDate() - 1);
+    }
+  } else if (profile.frequency === 'weekly') {
+    const targetDay = profile.delivery_day_of_week ?? 1; // 0=Sun, 1=Mon, ...
+    mostRecentScheduled = new Date(nowInTz);
+    const currentDay = nowInTz.getDay();
+    let daysSince = currentDay - targetDay;
+    if (daysSince < 0) daysSince += 7;
+    mostRecentScheduled.setDate(mostRecentScheduled.getDate() - daysSince);
+    mostRecentScheduled.setHours(schedH, schedM, 0, 0);
+    if (mostRecentScheduled > nowInTz) {
+      // This week's slot hasn't arrived yet — look at last week's
+      mostRecentScheduled.setDate(mostRecentScheduled.getDate() - 7);
+    }
+  } else if (profile.frequency === 'monthly') {
+    const targetDay = profile.delivery_day_of_month ?? 1;
+    mostRecentScheduled = new Date(nowInTz.getFullYear(), nowInTz.getMonth(), targetDay, schedH, schedM, 0, 0);
+    if (mostRecentScheduled > nowInTz) {
+      mostRecentScheduled.setMonth(mostRecentScheduled.getMonth() - 1);
+    }
+  } else {
+    return false;
   }
+
+  // Due if last generation was before the most recent scheduled slot
+  return lastInTz < mostRecentScheduled;
 }
 
 // Template prompts (same as generate.ts)
