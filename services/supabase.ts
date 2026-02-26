@@ -54,13 +54,13 @@ export const getCurrentUserId = async (): Promise<string | null> => {
 };
 
 export const fetchTableData = async (
-  tableName: string, 
-  page = 1, 
+  tableName: string,
+  page = 1,
   pageSize = 50,
   sortBy: { column: string, ascending: boolean } | null = null
 ): Promise<{ data: TableRow[] | null; count: number | null; error: any }> => {
   const client = getSupabase();
-  
+
   let query = client
     .from(tableName)
     .select('*', { count: 'exact' });
@@ -72,10 +72,52 @@ export const fetchTableData = async (
   // Calculate range
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
-  
+
   const { data, count, error } = await query.range(from, to);
-  
+
   return { data, count, error };
+};
+
+// Fetch ALL rows from a table, paginating through Supabase's 1000-row limit.
+// Use this whenever you need the complete dataset (graph nodes, edges, source stats).
+export const fetchAllRows = async (
+  tableName: string,
+  columns = '*',
+  filters?: { column: string; op: string; value: any }[]
+): Promise<{ data: TableRow[]; error: any }> => {
+  const client = getSupabase();
+  const PAGE_SIZE = 1000;
+  const allRows: TableRow[] = [];
+  let from = 0;
+
+  while (true) {
+    let query = client
+      .from(tableName)
+      .select(columns)
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (filters) {
+      for (const f of filters) {
+        if (f.op === 'eq') query = query.eq(f.column, f.value);
+        else if (f.op === 'neq') query = query.neq(f.column, f.value);
+        else if (f.op === 'not.is') query = query.not(f.column, 'is', f.value);
+      }
+    }
+
+    const { data, error } = await query;
+
+    if (error) return { data: allRows, error };
+    if (!data || data.length === 0) break;
+
+    allRows.push(...data);
+
+    // If we got fewer than PAGE_SIZE, we've reached the end
+    if (data.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+  }
+
+  return { data: allRows, error: null };
 };
 
 export const insertRows = async (tableName: string, rows: TableRow[]): Promise<{ error: any }> => {

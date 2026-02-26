@@ -12,7 +12,7 @@ import {
   Keyboard, Command, CornerDownLeft, Filter, User, Bot,
   Users, Target, ShieldAlert, Lightbulb
 } from 'lucide-react';
-import { fetchTableData, deleteRows, insertRows, mergeNodes, getCurrentUserId, fetchExistingNodes, fetchRelevantNodes, semanticSearchNodesExtended, getSupabase } from '../services/supabase';
+import { fetchTableData, fetchAllRows, deleteRows, insertRows, mergeNodes, getCurrentUserId, fetchExistingNodes, fetchRelevantNodes, semanticSearchNodesExtended, getSupabase } from '../services/supabase';
 import { generateCrossConnections, suggestRelationship, generateEmbedding, connectAnchorToKnowledgeEnhanced, ConnectionCandidate, BatchScanProgress } from '../services/gemini';
 import { promoteToAnchor, demoteFromAnchor } from '../services/anchorService';
 import AnchorScanReviewModal from './AnchorScanReviewModal';
@@ -1143,24 +1143,25 @@ export const GraphView: React.FC<GraphViewProps> = ({
     setIsMissingTables(false);
 
     try {
-      const { data: nodesData, error: nodesError } = await fetchTableData(config.nodeTable, 1, 2000);
-      
+      // Fetch ALL nodes and edges using paginated helper (Supabase caps at 1000/request)
+      const { data: nodesData, error: nodesError } = await fetchAllRows(config.nodeTable);
+
       if (nodesError) {
         const msg = nodesError.message || JSON.stringify(nodesError);
         if (msg.includes('does not exist') || nodesError.code === '42P01') {
           setIsMissingTables(true);
-          throw new Error("Tables not found"); 
+          throw new Error("Tables not found");
         }
         throw new Error(`Failed to fetch nodes: ${msg}`);
       }
-      
-      const { data: edgesData, error: edgesError } = await fetchTableData(config.edgeTable, 1, 5000);
+
+      const { data: edgesData, error: edgesError } = await fetchAllRows(config.edgeTable);
       if (edgesError) {
         const msg = edgesError.message || JSON.stringify(edgesError);
         throw new Error(`Failed to fetch edges: ${msg}`);
       }
 
-      if (!nodesData) throw new Error("No data returned from database.");
+      if (!nodesData || nodesData.length === 0) throw new Error("No data returned from database.");
 
       const nodes: GraphNode[] = nodesData.map(row => {
         const id = String(row[config.nodeIdCol]);

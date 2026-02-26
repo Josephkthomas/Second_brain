@@ -2,7 +2,7 @@
 // Merges youtube_ingestion_queue, ingest_queue, and knowledge_sources
 // into a single normalized view.
 
-import { getSupabase } from './supabase';
+import { getSupabase, fetchAllRows } from './supabase';
 import type { YouTubeQueueItem } from '../types/youtube';
 import type { IngestQueueItem } from '../types/ingest';
 import type {
@@ -286,12 +286,12 @@ function normalizeKnowledgeSource(
 async function fetchNodeStats(): Promise<
   Map<string, { nodeCount: number; edgeCount: number; topTypes: { type: string; count: number }[] }>
 > {
-  const client = getSupabase();
   const result = new Map<string, { nodeCount: number; edgeCount: number; topTypes: { type: string; count: number }[] }>();
 
+  // Paginate through all rows to avoid Supabase's 1000-row cap
   const [nodesRes, edgesRes] = await Promise.all([
-    client.from('knowledge_nodes').select('id, source_id, entity_type'),
-    client.from('knowledge_edges').select('source_node_id, target_node_id'),
+    fetchAllRows('knowledge_nodes', 'id, source_id, entity_type'),
+    fetchAllRows('knowledge_edges', 'source_node_id, target_node_id'),
   ]);
 
   const nodes = nodesRes.data || [];

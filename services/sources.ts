@@ -1,7 +1,7 @@
 // Source Explorer data fetching service
 // Provides data for SourcesSidebar and SourceDetailPanel
 
-import { getSupabase, getCurrentUserId } from './supabase';
+import { getSupabase, getCurrentUserId, fetchAllRows } from './supabase';
 
 export interface SourceWithStats {
   id: string;
@@ -40,17 +40,11 @@ export interface SourceEdge {
 export const fetchSourcesWithStats = async (): Promise<SourceWithStats[]> => {
   const client = getSupabase();
 
+  // Paginate through all rows to avoid Supabase's 1000-row cap
   const [sourcesRes, nodesRes, edgesRes] = await Promise.all([
-    client
-      .from('knowledge_sources')
-      .select('id, title, source_type, source_url, metadata, created_at')
-      .order('created_at', { ascending: false }),
-    client
-      .from('knowledge_nodes')
-      .select('id, source_id'),
-    client
-      .from('knowledge_edges')
-      .select('source_node_id, target_node_id'),
+    fetchAllRows('knowledge_sources', 'id, title, source_type, source_url, metadata, created_at'),
+    fetchAllRows('knowledge_nodes', 'id, source_id'),
+    fetchAllRows('knowledge_edges', 'source_node_id, target_node_id'),
   ]);
 
   if (sourcesRes.error || !sourcesRes.data) {
