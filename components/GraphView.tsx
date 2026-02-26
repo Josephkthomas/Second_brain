@@ -1773,7 +1773,9 @@ export const GraphView: React.FC<GraphViewProps> = ({
       .force("center", d3.forceCenter(0, 0).strength(0.05))
       .on("end", () => { simulation.stop(); });
 
-    if (isPaused) simulation.stop();
+    // Compute layout synchronously — static by default, zero CPU after load
+    simulation.stop();
+    for (let i = 0; i < 300; i++) simulation.tick();
 
     const linkGroup = g.append("g").attr("class", "links");
     
@@ -2260,6 +2262,24 @@ export const GraphView: React.FC<GraphViewProps> = ({
           }
       } else {
           ghostLine.attr("opacity", 0);
+      }
+    });
+
+    // --- Static initial render (layout already computed synchronously) ---
+    linkVisible
+      .attr("x1", (d: any) => d.source.x)
+      .attr("y1", (d: any) => d.source.y)
+      .attr("x2", (d: any) => d.target.x)
+      .attr("y2", (d: any) => d.target.y);
+
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+
+    pulseRingGroup.selectAll<SVGGElement, unknown>("g").each(function() {
+      const grp = d3.select(this);
+      const nodeId = grp.attr("data-node-id");
+      const n = graphData.nodes.find(nd => nd.id === nodeId);
+      if (n && n.x != null && n.y != null) {
+        grp.attr("transform", `translate(${n.x},${n.y})`);
       }
     });
 
