@@ -750,6 +750,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, any> | null>(null);
+  const currentZoomScale = useRef<number>(1);
   
   const [config, setConfig] = useState<GraphConfig>(SCHEMA_CONFIG);
   const [loading, setLoading] = useState(false);
@@ -1487,6 +1488,43 @@ export const GraphView: React.FC<GraphViewProps> = ({
      return graphData.nodes.filter(n => n.label.toLowerCase().includes(omnibarQuery.toLowerCase())).slice(0, 10);
   }, [omnibarQuery, graphData.nodes]);
 
+  // --- Performance: LOD & edge visibility helpers ---
+  const shouldShowNodeDetail = (node: GraphNode, zoomScale: number): boolean => {
+    if (xRayMode) return true;
+    if (zoomScale >= 0.8) return true;
+    if (zoomScale >= 0.4) return isAnchorNode(node);
+    return false;
+  };
+
+  const shouldShowEdge = (
+    sourceNode: GraphNode | undefined,
+    targetNode: GraphNode | undefined,
+    zoomScale: number
+  ): boolean => {
+    if (zoomScale >= 0.6) return true;
+    // Pathfinding path edges always visible
+    if (pathfindingPath.size > 0 && sourceNode && targetNode &&
+        pathfindingPath.has(sourceNode.id) && pathfindingPath.has(targetNode.id)) {
+      return true;
+    }
+    // Focus/filter mode: edges between focus nodes always visible
+    if ((focusSource || activeTagFilter) && sourceNode && targetNode) {
+      const sStatus = getLensStatus(sourceNode);
+      const tStatus = getLensStatus(targetNode);
+      if (sStatus === 'focus' && tStatus === 'focus') return true;
+    }
+    // Anchor-to-anchor edges always visible
+    if (sourceNode && targetNode && isAnchorNode(sourceNode) && isAnchorNode(targetNode)) {
+      return true;
+    }
+    const sourceDegree = sourceNode?.val || 0;
+    const targetDegree = targetNode?.val || 0;
+    if (zoomScale >= 0.3) {
+      return sourceDegree >= 2 && targetDegree >= 2;
+    }
+    return sourceDegree >= 5 && targetDegree >= 5;
+  };
+
   // Re-run D3 simulation effect
   useEffect(() => {
     if (!svgRef.current || graphData.nodes.length === 0) return;
@@ -1549,6 +1587,46 @@ export const GraphView: React.FC<GraphViewProps> = ({
       })
       .on("zoom", (event: any) => {
           g.attr("transform", event.transform.toString());
+
+          const transform = event.transform;
+          const scale = transform.k;
+          currentZoomScale.current = scale;
+
+          const svgEl = svgRef.current;
+          if (!svgEl) return;
+          const { clientWidth: W, clientHeight: H } = svgEl;
+          const BUFFER = 100;
+
+          // --- Viewport Culling ---
+          g.selectAll<SVGGElement, GraphNode>("g.node-group")
+            .style("display", (d: GraphNode) => {
+              if (d.x === undefined || d.y === undefined) return null;
+              const sx = transform.applyX(d.x);
+              const sy = transform.applyY(d.y);
+              return (sx < -BUFFER || sx > W + BUFFER || sy < -BUFFER || sy > H + BUFFER)
+                ? "none" : null;
+            });
+
+          // --- Level-of-Detail: labels ---
+          g.selectAll<SVGTextElement, GraphNode>("text.node-label")
+            .style("display", (d: GraphNode) => shouldShowNodeDetail(d, scale) ? null : "none");
+
+          // --- Level-of-Detail: anchor emojis & pin indicators ---
+          g.selectAll("text.anchor-emoji")
+            .style("display", scale >= 0.4 ? null : "none");
+          g.selectAll("text.pin-indicator")
+            .style("display", scale >= 0.8 ? null : "none");
+
+          // --- Edge Reduction ---
+          g.select("g.links").selectAll<SVGLineElement, GraphLink>("line")
+            .style("display", (d: any) => {
+              const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+              const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+              return shouldShowEdge(nodeById.get(sourceId), nodeById.get(targetId), scale) ? null : "none";
+            });
+
+          // --- Particle visibility at low zoom ---
+          g.select("g.particles").style("display", scale >= 0.4 ? null : "none");
       });
     
     zoomRef.current = zoom;
@@ -1669,9 +1747,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
     });
 
     const maxDegree = d3.max(graphData.nodes, d => d.val) || 1;
-    const radiusScale = d3.scaleSqrt().domain([0, maxDegree]).range([5, 25]); 
+    const radiusScale = d3.scaleSqrt().domain([0, maxDegree]).range([5, 25]);
+    const nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
 
     const simulation = d3.forceSimulation(graphData.nodes)
+      .alphaDecay(0.02)
       .force("link", d3.forceLink(graphData.links).id((d: any) => d.id).distance(100))
       .force("charge", d3.forceManyBody().strength((d: any) => {
          const status = getLensStatus(d as GraphNode);
@@ -1690,7 +1770,8 @@ export const GraphView: React.FC<GraphViewProps> = ({
          const isAnchor = isAnchorNode(d as GraphNode);
          return (isAnchor ? 50 : radiusScale(d.val || 0)) + 15;
       }))
-      .force("center", d3.forceCenter(0, 0).strength(0.05));
+      .force("center", d3.forceCenter(0, 0).strength(0.05))
+      .on("end", () => { simulation.stop(); });
 
     if (isPaused) simulation.stop();
 
@@ -2069,6 +2150,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
       if (isAnchor && anchorDetails) {
          sel.append("text")
            .text(anchorDetails.icon)
+           .attr("class", "anchor-emoji")
            .attr("text-anchor", "middle")
            .attr("dy", ".35em")
            .attr("font-size", radius * 1.2)
@@ -2088,6 +2170,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
     });
 
     node.append("text")
+      .attr("class", "node-label")
       .text((d: GraphNode) => d.label)
       .attr("x", (d: GraphNode) => {
           const isFocusedAnchor = d.id === focusedAnchorId;
