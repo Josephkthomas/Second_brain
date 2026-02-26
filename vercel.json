@@ -43,7 +43,7 @@
     },
     {
       "path": "/api/digest/cron",
-      "schedule": "0 * * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/youtube/poll-playlist",
