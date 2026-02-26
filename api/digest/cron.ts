@@ -5,6 +5,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI, Type } from '@google/genai';
+import { deliverToChannels } from './_delivery';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -237,6 +238,7 @@ async function generateDigestForProfile(supabase: any, profile: any): Promise<bo
       executive_summary: meta.executive_summary || 'Digest generated.',
       sections: moduleOutputs.map((o: any) => ({
         module_id: o.module_id, module_name: o.module_name, icon: o.icon,
+        template_id: o.template_id || null,
         content: o.content, highlights: o.highlights, entities_referenced: o.entities_referenced,
       })),
       suggested_next_steps: meta.suggested_next_steps || [],
@@ -249,18 +251,49 @@ async function generateDigestForProfile(supabase: any, profile: any): Promise<bo
       },
     };
 
-    await supabase.from('digest_history').insert({
+    // Save digest to history (return id for delivery)
+    const { data: insertedHistory, error: insertError } = await supabase.from('digest_history').insert({
       user_id: profile.user_id,
       digest_profile_id: profile.id,
       content: digestOutput,
       module_outputs: moduleOutputs,
       channels_delivered: ['in_app'],
       status: 'completed',
-    });
+    }).select('id').single();
+
+    if (insertError) {
+      console.error(`[Cron] Failed to save digest history for profile ${profile.id}:`, insertError);
+      return false;
+    }
 
     await supabase.from('digest_profiles')
       .update({ last_generated_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq('id', profile.id);
+
+    // Auto-deliver to configured channels (email, telegram, slack)
+    if (insertedHistory?.id) {
+      const { data: channels, error: channelsError } = await supabase
+        .from('digest_channels')
+        .select('*')
+        .eq('digest_profile_id', profile.id)
+        .eq('is_active', true);
+
+      if (channelsError) {
+        console.error(`[Cron] Failed to fetch channels for profile ${profile.id}:`, channelsError);
+      } else if (channels && channels.length > 0) {
+        const { deliveredChannels, errors } = await deliverToChannels(
+          supabase,
+          profile.name || 'Digest',
+          insertedHistory.id,
+          digestOutput,
+          channels,
+        );
+        console.log(`[Cron] Auto-delivered profile ${profile.id} to: ${deliveredChannels.join(', ')}`);
+        if (Object.keys(errors).length > 0) {
+          console.warn(`[Cron] Delivery errors for profile ${profile.id}:`, errors);
+        }
+      }
+    }
 
     return true;
   } catch (error) {
