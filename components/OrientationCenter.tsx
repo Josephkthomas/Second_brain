@@ -5,7 +5,7 @@ import {
   Sparkles, Clock, Play, Trash2, ToggleLeft, ToggleRight, GripVertical,
   Mail, Send, History, Settings2, ArrowUp, ArrowDown, Eye,
   Brain, Database, Cpu, CheckCircle2, XCircle, Loader2, Zap, BarChart3,
-  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb,
+  TrendingUp, GitMerge, Network, Gavel, CalendarDays, PieChart, Anchor, Lightbulb, Info,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -317,7 +317,10 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
       setFormName(profile.name);
       setFormDescription(profile.description || '');
       setFormFrequency(profile.frequency);
-      setFormTime(profile.delivery_time?.slice(0, 5) || '08:00');
+      const rawTime = profile.delivery_time?.slice(0, 5) || '08:00';
+      const [rH, rM] = rawTime.split(':').map(Number);
+      const snappedM = Math.round(rM / 15) * 15;
+      setFormTime(`${rH.toString().padStart(2, '0')}:${(snappedM >= 60 ? 0 : snappedM).toString().padStart(2, '0')}`);
       setFormTimezone(profile.timezone);
       setFormDayOfWeek(profile.delivery_day_of_week ?? 1);
       setFormDayOfMonth(profile.delivery_day_of_month ?? 1);
@@ -980,13 +983,46 @@ export const OrientationCenter: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
             <div>
-              <label className="text-xs text-slate-500 mb-1 block">Delivery Time</label>
-              <input
-                type="time"
-                value={formTime}
-                onChange={e => setFormTime(e.target.value)}
-                className="w-full px-3 py-1.5 rounded-md bg-black/30 border border-white/10 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
-              />
+              <label className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
+                Delivery Time
+                <span className="relative group/tip cursor-help">
+                  <Info size={11} className="text-slate-600" />
+                  <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 rounded bg-slate-800 border border-slate-700 text-[10px] text-slate-300 leading-tight w-48 text-center opacity-0 pointer-events-none group-hover/tip:opacity-100 transition-opacity z-50">
+                    Digests are checked every 15 minutes, so delivery times are in 15-min intervals for precise scheduling.
+                  </span>
+                </span>
+              </label>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={formTime.split(':')[0] || '08'}
+                  onChange={e => {
+                    const mins = formTime.split(':')[1] || '00';
+                    setFormTime(`${e.target.value}:${mins}`);
+                  }}
+                  className="flex-1 px-3 py-1.5 rounded-md bg-black/30 border border-white/10 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                >
+                  {Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0')).map(h => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+                <span className="text-slate-500 text-sm font-bold">:</span>
+                <select
+                  value={(() => {
+                    const m = parseInt(formTime.split(':')[1] || '0');
+                    const snapped = Math.round(m / 15) * 15;
+                    return (snapped >= 60 ? 0 : snapped).toString().padStart(2, '0');
+                  })()}
+                  onChange={e => {
+                    const hrs = formTime.split(':')[0] || '08';
+                    setFormTime(`${hrs}:${e.target.value}`);
+                  }}
+                  className="flex-1 px-3 py-1.5 rounded-md bg-black/30 border border-white/10 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                >
+                  {['00', '15', '30', '45'].map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
           {formFrequency === 'weekly' && (
